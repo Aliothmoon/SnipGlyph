@@ -243,7 +243,11 @@ func (p *ClipPanel) build() error {
 	}
 	p.list.onActivate = func(int) { p.paste(false) }
 	p.list.onRightButton = p.itemMenuFor
-	p.list.cw.MouseDown().Attach(func(int, int, walk.MouseButton) { p.search.SetFocus() })
+	p.list.cw.MouseDown().Attach(func(int, int, walk.MouseButton) {
+		if !p.gone() { // a double click pastes and closes the panel
+			p.search.SetFocus()
+		}
+	})
 	layout.SetStretchFactor(p.listCard, fillStretch)
 
 	var editInner *walk.Composite
@@ -577,7 +581,7 @@ func (p *ClipPanel) itemMenuFor(int) {
 		a := walk.NewAction()
 		a.SetText(text)
 		a.SetEnabled(enabled)
-		a.Triggered().Attach(func() { walk.App().Synchronize(f) })
+		a.Triggered().Attach(func() { p.later(f) })
 		list.Add(a)
 	}
 	add(acts, "粘贴\tEnter", true, func() { p.paste(false) })
@@ -622,7 +626,7 @@ func (p *ClipPanel) tabMenuFor(i int) {
 	add := func(text string, f func()) {
 		a := walk.NewAction()
 		a.SetText(text)
-		a.Triggered().Attach(func() { walk.App().Synchronize(f) })
+		a.Triggered().Attach(func() { p.later(f) })
 		acts.Add(a)
 	}
 	add("新建标签…", p.addTab)
@@ -630,6 +634,16 @@ func (p *ClipPanel) tabMenuFor(i int) {
 		add("重命名…", func() { p.renameTab(i) })
 		add("删除标签…", func() { p.deleteTab(i) })
 	}
+}
+
+// later runs f after the menu that chose it has closed, unless the panel
+// closed meanwhile.
+func (p *ClipPanel) later(f func()) {
+	walk.App().Synchronize(func() {
+		if !p.gone() {
+			f()
+		}
+	})
 }
 
 // clipKeys drives the panel from the keyboard while the search box (or
