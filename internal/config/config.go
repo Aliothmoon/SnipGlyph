@@ -17,6 +17,14 @@ type Config struct {
 	Hotkeys   Hotkeys   `json:"hotkeys"`
 	Translate Translate `json:"translate"`
 	History   History   `json:"history"`
+	Clipboard Clipboard `json:"clipboard"`
+}
+
+type Clipboard struct {
+	// Enabled records everything copied, for the clipboard history panel.
+	Enabled bool `json:"enabled"`
+	// Limit is how many unpinned items the default tab keeps.
+	Limit int `json:"limit"`
 }
 
 type History struct {
@@ -55,6 +63,7 @@ type Hotkeys struct {
 	ScreenshotTranslate string `json:"screenshot_translate"`
 	SelectionTranslate  string `json:"selection_translate"`
 	InputTranslate      string `json:"input_translate"`
+	ClipboardHistory    string `json:"clipboard_history"`
 }
 
 func Default() Config {
@@ -65,11 +74,13 @@ func Default() Config {
 			ScreenshotTranslate: "Win+Alt+S",
 			SelectionTranslate:  "Win+Alt+X",
 			InputTranslate:      "Win+Alt+I",
+			ClipboardHistory:    "Alt+V",
 		},
 		Translate: Translate{
 			TargetLang: "zh-Hans",
 		},
-		History: History{Enabled: true},
+		History:   History{Enabled: true},
+		Clipboard: Clipboard{Enabled: true, Limit: 5000},
 	}
 }
 

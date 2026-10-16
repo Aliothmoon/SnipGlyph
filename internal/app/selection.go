@@ -34,7 +34,13 @@ func (a *App) selectionTranslate() {
 	ctx, cancel := context.WithTimeout(walk.App().Context(), grabTimeout)
 	defer cancel()
 	began := time.Now()
+	// The copy 划词 may send is not something to keep in clipboard history.
+	a.clipPaused.Store(true)
 	text, method, err := textgrab.Selected(ctx)
+	if method == textgrab.ByCopy {
+		a.ownClipboardChange()
+	}
+	a.clipPaused.Store(false)
 	text = strings.TrimSpace(text)
 	slog.Info("selection grabbed", "method", method, "runes", len([]rune(text)),
 		"took", time.Since(began).Round(time.Millisecond), "err", err)

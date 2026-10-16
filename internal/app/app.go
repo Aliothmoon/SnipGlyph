@@ -32,9 +32,10 @@ const (
 	ScreenshotTranslate
 	SelectionTranslate
 	InputTranslate
+	ClipboardHistory
 )
 
-var allActions = []Action{ScreenshotOCR, SilentOCR, ScreenshotTranslate, SelectionTranslate, InputTranslate}
+var allActions = []Action{ScreenshotOCR, SilentOCR, ScreenshotTranslate, SelectionTranslate, InputTranslate, ClipboardHistory}
 
 func (a Action) String() string {
 	switch a {
@@ -48,6 +49,8 @@ func (a Action) String() string {
 		return "划词翻译"
 	case InputTranslate:
 		return "输入翻译"
+	case ClipboardHistory:
+		return "剪贴板历史"
 	}
 	return fmt.Sprintf("Action(%d)", int(a))
 }
@@ -64,6 +67,8 @@ func (a Action) hotkey(h config.Hotkeys) string {
 		return h.SelectionTranslate
 	case InputTranslate:
 		return h.InputTranslate
+	case ClipboardHistory:
+		return h.ClipboardHistory
 	}
 	return ""
 }
@@ -72,8 +77,10 @@ type Options struct {
 	ConfigPath string
 	ConfigDir  string
 	LogDir     string
-	// HistoryPath is the history database.
-	HistoryPath string
+	// HistoryPath is the translation history database, ClipboardPath the
+	// clipboard history database.
+	HistoryPath   string
+	ClipboardPath string
 	// Exe is this program, for the autostart entry.
 	Exe string
 	// OCRWorker returns the command for an OCR worker process: one that
@@ -107,6 +114,8 @@ type App struct {
 	// Open windows, nil when closed. UI thread only.
 	settingsWin *ui.Settings
 	histWin     *ui.HistoryWindow
+
+	clipboard
 }
 
 // Run starts the tray app and blocks until the user exits. It must be called
@@ -136,6 +145,10 @@ func Run(opts Options) error {
 		problems = append(problems, p)
 	}
 	defer a.closeHistory()
+	if p := a.openClipboard(); p != "" {
+		problems = append(problems, p)
+	}
+	defer a.closeClipboard()
 	if a.tray, err = ui.NewTray("SnipGlyph", a.menu()); err != nil {
 		return fmt.Errorf("create tray icon: %w", err)
 	}
@@ -223,6 +236,7 @@ func (a *App) menu() []ui.MenuItem {
 		item(SilentOCR),
 		item(ScreenshotTranslate),
 		item(InputTranslate),
+		item(ClipboardHistory),
 		{},
 		{Text: "历史记录", OnClick: a.openHistoryWindow},
 		{Text: "设置", OnClick: a.openSettings},
@@ -245,6 +259,9 @@ func (a *App) reload() {
 	}
 	if a.histWin != nil {
 		a.histWin.SetRecording(a.cfg.History.Enabled)
+	}
+	if p := a.applyClipboard(); p != "" {
+		problems = append(problems, p)
 	}
 	switch {
 	case cfgErr != nil:
@@ -271,6 +288,11 @@ func (a *App) trigger(act Action) {
 		go a.selectionTranslate()
 	case InputTranslate:
 		go a.inputTranslate()
+	case ClipboardHistory:
+		// Right away, while Alt is still down: releasing it alone would put
+		// the panel into menu mode and swallow the first key typed.
+		input.MaskHotkey()
+		ui.Do(a.toggleClipPanel)
 	default:
 		a.tray.Info(act.String(), "功能开发中")
 	}

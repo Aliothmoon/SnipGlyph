@@ -72,6 +72,9 @@ func (a *App) saveSettings(cfg config.Config, autostartOn bool) ([]string, error
 	if a.histWin != nil {
 		a.histWin.SetRecording(cfg.History.Enabled)
 	}
+	if p := a.applyClipboard(); p != "" {
+		problems = append(problems, p)
+	}
 	return problems, nil
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"SnipGlyph/internal/app"
 	"SnipGlyph/internal/appdir"
+	"SnipGlyph/internal/cliphist"
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/instance"
@@ -84,12 +85,13 @@ func run() int {
 	}
 	ocrCache := filepath.Join(local, "oneocr")
 	err = app.Run(app.Options{
-		ConfigPath:  filepath.Join(roaming, config.FileName),
-		ConfigDir:   roaming,
-		LogDir:      logDir,
-		HistoryPath: filepath.Join(local, history.FileName),
-		Exe:         exe,
-		OCRWorker:   func() *exec.Cmd { return exec.Command(exe, workerFlag, ocrCache) },
+		ConfigPath:    filepath.Join(roaming, config.FileName),
+		ConfigDir:     roaming,
+		LogDir:        logDir,
+		HistoryPath:   filepath.Join(local, history.FileName),
+		ClipboardPath: filepath.Join(local, cliphist.FileName),
+		Exe:           exe,
+		OCRWorker:     func() *exec.Cmd { return exec.Command(exe, workerFlag, ocrCache) },
 	})
 	if err != nil {
 		return fatal("启动失败", err)
