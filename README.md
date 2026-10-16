@@ -20,7 +20,7 @@ CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o bin/snipglyph.exe ./cmd
 
 ```sh
 go test ./...                              # 需要本机装有截图工具，否则 OCR 测试自动跳过
-SNIPGLYPH_UI_TESTS=1 go test ./internal/capture ./internal/ui ./internal/toast   # 会在屏幕上闪现遮罩层、弹窗和 toast
+SNIPGLYPH_UI_TESTS=1 go test ./internal/capture ./internal/ui ./internal/toast   # 会在屏幕上闪现遮罩层、弹窗、设置和历史窗口、toast
 SNIPGLYPH_BAIDU_APPID=... SNIPGLYPH_BAIDU_KEY=... go test ./internal/translate   # 调用真实的百度翻译 API
 SNIPGLYPH_CLIPBOARD_TESTS=1 go test ./internal/textgrab   # 读写真实剪贴板，结束时还原
 ```
@@ -34,20 +34,36 @@ SNIPGLYPH_CLIPBOARD_TESTS=1 go test ./internal/textgrab   # 读写真实剪贴�
 
 | 路径 | 内容 |
 |---|---|
-| `%APPDATA%\SnipGlyph\config.json` | 配置（首次启动写入默认值；改完在托盘菜单点「重新加载配置」） |
+| `%APPDATA%\SnipGlyph\config.json` | 配置（首次启动写入默认值；手动改完在托盘菜单点「重新加载配置」） |
+| `%LOCALAPPDATA%\SnipGlyph\history.db` | 历史记录（SQLite，只存文字，最近 5000 条） |
 | `%LOCALAPPDATA%\SnipGlyph\logs\snipglyph.log` | 日志，超过 5MB 启动时轮转 |
 | `%LOCALAPPDATA%\SnipGlyph\oneocr\<版本>\` | 从截图工具复制出来的 OneOCR DLL（约 56MB） |
 
-## 翻译配置
+开机自启写在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `SnipGlyph` 值里，指向开启时的 exe 路径；
+exe 换了位置要在设置里重新保存一次。任务管理器「启动应用」里禁用后，设置页显示为关闭。
 
-设置页（M4）完成前，直接编辑 `config.json` 的 `translate` 部分，然后在托盘菜单点「重新加载配置」：
+## 设置
+
+托盘菜单「设置」：开机自启、历史记录开关、快捷键（点输入框后直接按组合键，Backspace 清除）、目标语言、
+百度翻译的 APP ID / 密钥 / 代理（可先点「测试」）。保存后立即生效，不用重启。
+
+## 历史记录
+
+托盘菜单「历史记录」：按时间倒序列出 OCR 和翻译结果，搜索框按空格分隔多个关键字（都要命中），
+三个字以上走全文索引（trigram），更短的逐条匹配。双击或 Enter 在弹窗里重新打开，可改原文再翻译，结果写回同一条；
+Delete 删除选中的一条，「清空全部」删除后会压缩数据库文件，不留残余文字。
+
+## 配置文件
+
+设置页覆盖了所有选项；也可以直接编辑 `config.json`，然后在托盘菜单点「重新加载配置」：
 
 ```json
 "translate": {
   "engine": "baidu",
   "target_lang": "zh-Hans",
   "baidu": { "app_id": "你的 APP ID", "key": "你的密钥", "proxy": "" }
-}
+},
+"history": { "enabled": true }
 ```
 
 - `key` 可以填明文，程序读取后会立即改写为 `dpapi:...` 密文，只有当前 Windows 账户能解开。
