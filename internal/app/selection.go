@@ -20,7 +20,7 @@ import (
 const grabTimeout = 4 * time.Second
 
 // selectionTranslate translates the text selected in the foreground
-// program. Runs on its own goroutine; call textgrab.MaskHotkey first.
+// program. Runs on its own goroutine; call input.MaskHotkey first.
 func (a *App) selectionTranslate() {
 	if !a.grabbing.CompareAndSwap(false, true) {
 		return

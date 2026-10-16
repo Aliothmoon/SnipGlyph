@@ -16,8 +16,8 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/hotkey"
+	"SnipGlyph/internal/input"
 	"SnipGlyph/internal/ocr"
-	"SnipGlyph/internal/textgrab"
 	"SnipGlyph/internal/translate"
 	"SnipGlyph/internal/ui"
 )
@@ -267,7 +267,7 @@ func (a *App) trigger(act Action) {
 		go a.screenshotOCR(act, true)
 	case SelectionTranslate:
 		// Right away, while the hotkey's modifiers are still down.
-		textgrab.MaskHotkey()
+		input.MaskHotkey()
 		go a.selectionTranslate()
 	case InputTranslate:
 		go a.inputTranslate()
