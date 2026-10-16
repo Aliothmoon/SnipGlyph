@@ -41,21 +41,27 @@ func cursorMonitor() (image.Rectangle, int) {
 	return monitorOf(image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1))
 }
 
-// placeFitted gives mw a client area width DIPs wide and as tall as its
-// layout needs, centred on the monitor under the mouse pointer.
-func placeFitted(mw *walk.MainWindow, width int) error {
+// showFitted shows mw with a client area width DIPs wide and as tall as
+// its layout needs, centred on the monitor under the mouse pointer. walk
+// lays out only visible children, so the window is measured while shown
+// but cloaked, then revealed in place.
+func showFitted(mw *walk.MainWindow, width int) error {
 	work, dpi := cursorMonitor()
 	w := width * dpi / 96
 	// Move onto the monitor first, so the window adopts its DPI.
 	if err := mw.SetBoundsPixels(centerIn(work, w, w)); err != nil {
 		return err
 	}
-	frameX, frameY := frameSize(mw.Handle())
-	h := w
+	h := mw.Handle()
+	cloak(h, true)
+	defer cloak(h, false)
+	mw.Show()
+	frameX, frameY := frameSize(h)
+	height := w
 	if li, ok := walk.CreateLayoutItemsForContainer(mw).(walk.MinSizeForSizer); ok {
-		h = li.MinSizeForSize(walk.Size{Width: w}).Height
+		height = li.MinSizeForSize(walk.Size{Width: w}).Height
 	}
-	return mw.SetBoundsPixels(centerIn(work, w+frameX, h+frameY))
+	return mw.SetBoundsPixels(centerIn(work, w+frameX, height+frameY))
 }
 
 // refitHeight grows or shrinks mw to its layout's height at the current

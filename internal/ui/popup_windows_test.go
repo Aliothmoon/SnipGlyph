@@ -71,7 +71,7 @@ func popupLayoutAndFit(t *testing.T, round int) {
 		}
 		// The test process may not own the foreground, and an unpinned popup
 		// closes as soon as it loses activation.
-		p.pin.SetChecked(true)
+		p.setPinned(true)
 		p.SetSourceBusy("正在识别…")
 	})
 	time.Sleep(200 * time.Millisecond)

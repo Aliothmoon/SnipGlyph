@@ -98,7 +98,17 @@ func TestSettingsWindow(t *testing.T) {
 		if !fitsInClient(s.mw.Handle(), s.saveBt.Handle()) {
 			t.Errorf("save button cut off: window %+v", s.mw.BoundsPixels())
 		}
-		t.Logf("settings window %+v", s.mw.BoundsPixels())
+		// Measured before it was shown, the window once came out a few
+		// pixels tall, was centred at that size and then grew downwards off
+		// the screen.
+		b := s.mw.BoundsPixels()
+		work, _ := cursorMonitor()
+		if b.Y < work.Min.Y || b.Y+b.Height > work.Max.Y {
+			t.Errorf("window %+v spills out of the work area %v", b, work)
+		} else if top, bottom := b.Y-work.Min.Y, work.Max.Y-(b.Y+b.Height); top-bottom > 2 || bottom-top > 2 {
+			t.Errorf("window %+v not centred in %v", b, work)
+		}
+		t.Logf("settings window %+v", b)
 
 		s.boxes[2].le.SetFocus()
 	})

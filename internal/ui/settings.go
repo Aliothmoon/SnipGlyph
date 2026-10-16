@@ -119,10 +119,9 @@ func NewSettings(opts SettingsOptions) (*Settings, error) {
 			opts.OnClose()
 		}
 	})
-	if err := placeFitted(mw, settingsWidth); err != nil {
+	if err := showFitted(mw, settingsWidth); err != nil {
 		return nil, err
 	}
-	mw.Show()
 	win.SetForegroundWindow(h)
 	s.saveBt.SetFocus()
 	ok = true

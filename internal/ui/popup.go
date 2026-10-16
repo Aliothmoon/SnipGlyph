@@ -47,10 +47,11 @@ type Popup struct {
 	copyRes *walk.LinkLabel
 	result  *walk.TextEdit
 
-	pin      *walk.CheckBox
+	pin      *iconButton
 	hint     *walk.Label
 	translBt *walk.PushButton
 
+	pinned      bool // stays open when it loses focus
 	expanded    bool
 	closing     bool
 	settingText bool // the source text is being set by code, not typed
@@ -82,7 +83,7 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 		// a form while handling WM_CLOSE, destroying it deactivates it, and a
 		// second Close re-entering Dispose deadlocks the UI thread.
 		walk.App().Synchronize(func() {
-			if !p.closing && !p.gone() && !p.pin.Checked() {
+			if !p.closing && !p.gone() && !p.pinned {
 				mw.Close()
 			}
 		})
@@ -99,15 +100,19 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 	// Tool window: no taskbar button. Set while hidden so it takes effect.
 	ex := win.GetWindowLong(h, win.GWL_EXSTYLE)
 	win.SetWindowLong(h, win.GWL_EXSTYLE, ex|win.WS_EX_TOOLWINDOW)
-	// Move onto the target monitor first, so the window adopts its DPI, then
-	// size it to the content.
+	frameless(mw) // the header row is the title bar
+	// Move onto the target monitor first, so the window adopts its DPI.
 	work, dpi := monitorOf(opts.Anchor)
 	if err := mw.SetBoundsPixels(centerIn(work, fitMinW*dpi/96, 200*dpi/96)); err != nil {
 		return nil, err
 	}
-	p.fit(work, centreInWork)
 	win.SetWindowPos(h, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE|win.SWP_NOSIZE)
+	// Size it to the content while shown but cloaked: walk measures only
+	// visible children.
+	cloak(h, true)
 	mw.Show()
+	p.fit(work, centreInWork)
+	cloak(h, false)
 	win.SetForegroundWindow(h)
 	p.source.SetFocus()
 	ok = true
@@ -116,15 +121,49 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 
 func (p *Popup) build() error {
 	mw := p.mw
+	outer := walk.NewVBoxLayout()
+	outer.SetMargins(walk.Margins{})
+	outer.SetSpacing(0)
+	if err := mw.SetLayout(outer); err != nil {
+		return err
+	}
+
+	// Header: the title bar, drawn by us.
+	bar, err := row(mw)
+	if err != nil {
+		return err
+	}
+	bar.Layout().SetMargins(walk.Margins{HNear: 12, VNear: 6, HFar: 6, VFar: 2})
+	bar.Layout().SetSpacing(2)
+	title, err := label(bar, p.opts.Title, colorMuted, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := walk.NewHSpacer(bar); err != nil {
+		return err
+	}
+	if p.pin, err = newIconButton(bar, glyphPin, "钉住：点别处不关闭", false, func() { p.setPinned(!p.pinned) }); err != nil {
+		return err
+	}
+	if _, err := newIconButton(bar, glyphClose, "关闭（Esc）", true, func() { p.mw.Close() }); err != nil {
+		return err
+	}
+	dragBy(mw, bar)
+	dragBy(mw, title)
+
+	body, err := walk.NewComposite(mw)
+	if err != nil {
+		return err
+	}
 	layout := walk.NewVBoxLayout()
-	layout.SetMargins(walk.Margins{HNear: 12, VNear: 10, HFar: 12, VFar: 10})
+	layout.SetMargins(walk.Margins{HNear: 12, VNear: 2, HFar: 12, VFar: 10})
 	layout.SetSpacing(10)
-	if err := mw.SetLayout(layout); err != nil {
+	if err := body.SetLayout(layout); err != nil {
 		return err
 	}
 
 	// Source card.
-	srcCard, src, err := card(mw)
+	srcCard, src, err := card(body)
 	if err != nil {
 		return err
 	}
@@ -160,7 +199,7 @@ func (p *Popup) build() error {
 
 	// Translation card.
 	var tr *walk.Composite
-	if p.trCard, tr, err = card(mw); err != nil {
+	if p.trCard, tr, err = card(body); err != nil {
 		return err
 	}
 	if head, err = row(tr); err != nil {
@@ -201,15 +240,10 @@ func (p *Popup) build() error {
 	layout.SetStretchFactor(p.trCard, 1)
 
 	// Footer.
-	foot, err := row(mw)
+	foot, err := row(body)
 	if err != nil {
 		return err
 	}
-	if p.pin, err = walk.NewCheckBox(foot); err != nil {
-		return err
-	}
-	p.pin.SetText("钉住")
-	p.pin.SetToolTipText("钉住后点别处不会关闭")
 	if p.hint, err = label(foot, defaultHint, colorMuted, nil); err != nil {
 		return err
 	}
@@ -230,6 +264,18 @@ func (p *Popup) build() error {
 	p.copyRes.SetEnabled(false)
 	setShown(p.trCard, false) // opens on the first translation
 	return nil
+}
+
+// setPinned keeps the popup open when it loses focus, or lets it close.
+func (p *Popup) setPinned(on bool) {
+	p.pinned = on
+	if on {
+		p.pin.setGlyph(glyphPinned, true)
+		p.pin.cw.SetToolTipText("取消钉住")
+	} else {
+		p.pin.setGlyph(glyphPin, false)
+		p.pin.cw.SetToolTipText("钉住：点别处不关闭")
+	}
 }
 
 func (p *Popup) onKey(key walk.Key) {
