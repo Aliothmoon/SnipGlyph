@@ -75,8 +75,11 @@ func newIconButton(parent walk.Container, glyph, tip string, danger bool, onClic
 			return
 		}
 		b.pressed = false
+		s := cw.ClientBoundsPixels()
+		inside := x >= 0 && y >= 0 && x < s.Width && y < s.Height
+		b.hot = inside // released outside: no leave message comes after a drag
 		cw.Invalidate()
-		if s := cw.ClientBoundsPixels(); x >= 0 && y >= 0 && x < s.Width && y < s.Height && b.onClick != nil {
+		if inside && b.onClick != nil {
 			b.onClick()
 		}
 	})

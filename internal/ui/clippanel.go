@@ -96,7 +96,8 @@ func NewClipPanel(opts ClipPanelOptions) (*ClipPanel, error) {
 	walk.App().AddPreTranslateHandlerForHWND(h, clipKeys{p})
 	mw.Deactivating().Attach(func() {
 		walk.App().Synchronize(func() {
-			if !p.gone() && p.holdOpen == 0 && p.editing == 0 {
+			// It may have been activated again in the meantime.
+			if !p.gone() && p.holdOpen == 0 && p.editing == 0 && win.GetForegroundWindow() != h {
 				mw.Close()
 			}
 		})

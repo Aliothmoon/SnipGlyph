@@ -77,13 +77,14 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 	h := mw.Handle()
 	// Ctrl+Enter translates. Catch it before TranslateMessage, or the edit
 	// control would also insert a line break.
-	walk.App().AddPreTranslateHandlerForHWND(h, ctrlEnter{p})
+	walk.App().AddPreTranslateHandlerForHWND(h, popupKeys{p})
 	mw.Deactivating().Attach(func() {
 		// Close later, never from inside the activation change: walk disposes
 		// a form while handling WM_CLOSE, destroying it deactivates it, and a
 		// second Close re-entering Dispose deadlocks the UI thread.
 		walk.App().Synchronize(func() {
-			if !p.closing && !p.gone() && !p.pinned {
+			// It may have been activated again in the meantime.
+			if !p.closing && !p.gone() && !p.pinned && win.GetForegroundWindow() != h {
 				mw.Close()
 			}
 		})
@@ -183,7 +184,6 @@ func (p *Popup) build() error {
 	if p.source, err = textBox(src); err != nil {
 		return err
 	}
-	p.source.KeyDown().Attach(p.onKey)
 	// Typing (input translation, fixing OCR text) updates what can be copied
 	// or translated, and grows the box with the text.
 	p.source.TextChanged().Attach(func() {
@@ -219,6 +219,8 @@ func (p *Popup) build() error {
 	}
 	if len(p.opts.Engines) > 0 {
 		p.engine.SetCurrentIndex(p.opts.Engine)
+	} else {
+		setShown(p.engine, false) // the pane explains how to add one
 	}
 	p.engine.SetToolTipText("翻译引擎")
 	p.engine.CurrentIndexChanged().Attach(func() {
@@ -233,7 +235,6 @@ func (p *Popup) build() error {
 		return err
 	}
 	p.result.SetReadOnly(true)
-	p.result.KeyDown().Attach(p.onKey)
 
 	// Both cards share the height.
 	layout.SetStretchFactor(srcCard, 1)
@@ -278,23 +279,38 @@ func (p *Popup) setPinned(on bool) {
 	}
 }
 
-func (p *Popup) onKey(key walk.Key) {
-	if key == walk.KeyEscape {
-		p.mw.Close()
-	}
-}
+// popupKeys handles the popup's keys wherever the focus is: Esc closes it,
+// Ctrl+Enter in the source box translates. Ctrl+Enter is caught before
+// TranslateMessage, or the edit control would also insert a line break.
+type popupKeys struct{ p *Popup }
 
-type ctrlEnter struct{ p *Popup }
-
-func (c ctrlEnter) OnPreTranslate(msg *win.MSG) bool {
-	if msg.Message != win.WM_KEYDOWN || msg.WParam != win.VK_RETURN || walk.ModifiersDown() != walk.ModControl {
+func (k popupKeys) OnPreTranslate(msg *win.MSG) bool {
+	p := k.p
+	if p.gone() || msg.Message != win.WM_KEYDOWN {
 		return false
 	}
-	if c.p.gone() || msg.HWnd != c.p.source.Handle() {
+	h := p.mw.Handle()
+	if msg.HWnd != h && !win.IsChild(h, msg.HWnd) {
 		return false
 	}
-	c.p.requestTranslation()
-	return true
+	mods := walk.ModifiersDown()
+	switch {
+	case msg.WParam == win.VK_RETURN && mods == walk.ModControl && msg.HWnd == p.source.Handle():
+		p.requestTranslation()
+		return true
+	case msg.WParam == win.VK_ESCAPE && mods == 0:
+		// An open drop-down list takes Esc to close itself.
+		if win.SendMessage(msg.HWnd, win.CB_GETDROPPEDSTATE, 0, 0) != 0 {
+			return false
+		}
+		walk.App().Synchronize(func() {
+			if !p.gone() {
+				p.mw.Close()
+			}
+		})
+		return true
+	}
+	return false
 }
 
 func (p *Popup) requestTranslation() {
