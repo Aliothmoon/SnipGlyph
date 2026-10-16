@@ -35,6 +35,10 @@ func classWindow(t *testing.T, class, text string, start, end int) (hwnd windows
 		const wsPopup, esMultiline = 0x80000000, 0x0004
 		h, _, _ := procCreateWindowExT.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(txt)),
 			wsPopup|esMultiline, 0, 0, 300, 100, 0, 0, 0, 0)
+		if h == 0 {
+			ready <- 0 // no window: no message loop to leave running
+			return
+		}
 		const emSetSel = 0x00B1
 		procSendMessageT.Call(h, emSetSel, uintptr(start), uintptr(end))
 		ready <- windows.HWND(h)

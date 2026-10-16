@@ -141,18 +141,10 @@ func (c *Clipboard) Formats() []uint32 {
 	}
 }
 
-// Has reports whether format f is on the clipboard.
-func (c *Clipboard) Has(f uint32) bool {
-	for _, g := range c.Formats() {
-		if g == f {
-			return true
-		}
-	}
-	return false
-}
-
 // Data copies the global-memory data of format f. It returns nil and no
-// error when the format is absent.
+// error when the format is absent. For a format the owner renders on
+// demand this waits for the owner, as every clipboard reader does; a hung
+// owner blocks it, with the clipboard open.
 func (c *Clipboard) Data(f uint32) ([]byte, error) {
 	h, _, _ := procGetClipboardData.Call(uintptr(f))
 	if h == 0 {
@@ -165,6 +157,17 @@ func (c *Clipboard) Data(f uint32) ([]byte, error) {
 func (c *Clipboard) Owner() windows.HWND {
 	h, _, _ := procGetClipboardOwner.Call()
 	return windows.HWND(h)
+}
+
+// OwnerProcess is the id of the process that put the content on the
+// clipboard, or 0. The clipboard need not be open.
+func OwnerProcess() uint32 {
+	h, _, _ := procGetClipboardOwner.Call()
+	var pid uint32
+	if h != 0 {
+		windows.GetWindowThreadProcessId(windows.HWND(h), &pid)
+	}
+	return pid
 }
 
 // Empty clears the clipboard and makes this process its owner.
@@ -264,7 +267,9 @@ type WriteOptions struct {
 	Hidden bool
 }
 
-// Write replaces the clipboard content with items.
+// Write replaces the clipboard content with items. A format that fails
+// does not stop the others, so as much as possible gets through; the
+// first failure is returned. An empty list just empties the clipboard.
 func Write(ctx context.Context, items []Item, opts WriteOptions) error {
 	c, err := Open(ctx)
 	if err != nil {
@@ -272,15 +277,16 @@ func Write(ctx context.Context, items []Item, opts WriteOptions) error {
 	}
 	defer c.Close()
 	c.Empty()
+	var first error
 	for _, it := range items {
-		if err := c.Set(it.Format, it.Data); err != nil {
-			return fmt.Errorf("set clipboard format %d: %w", it.Format, err)
+		if err := c.Set(it.Format, it.Data); err != nil && first == nil {
+			first = fmt.Errorf("set clipboard format %d: %w", it.Format, err)
 		}
 	}
-	if opts.Hidden {
+	if opts.Hidden && len(items) > 0 {
 		c.excludeFromHistory()
 	}
-	return nil
+	return first
 }
 
 // Restore puts saved items back, hidden from clipboard history: the round

@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"SnipGlyph/internal/input"
 	"SnipGlyph/internal/winclip"
@@ -33,7 +36,18 @@ const (
 	automationTimeout = 600 * time.Millisecond
 	releaseTimeout    = 2 * time.Second
 	copyTimeout       = 800 * time.Millisecond
+	// lateCopyWindow is how long after giving up on a copy a late one is
+	// still undone.
+	lateCopyWindow = 3 * time.Second
 )
+
+var errAutomationBusy = errors.New("an earlier UI Automation call is still blocked")
+
+// automationRunning is set while a UI Automation call is in flight. A call
+// stuck in a hung program is abandoned, not cancelled; while it is stuck,
+// new grabs go straight to copying, so at most one such call is ever left
+// behind.
+var automationRunning atomic.Bool
 
 // Selected returns the text selected in the foreground program. It asks UI
 // Automation first, which has no side effects; when the focused control
@@ -64,8 +78,12 @@ func automationSelected(ctx context.Context) (string, error) {
 		s   string
 		err error
 	}
+	if !automationRunning.CompareAndSwap(false, true) {
+		return "", errAutomationBusy
+	}
 	ch := make(chan result, 1)
 	go func() {
+		defer automationRunning.Store(false)
 		s, err := withAutomation(focusedSelection)
 		ch <- result{s, err}
 	}()
@@ -80,12 +98,16 @@ func automationSelected(ctx context.Context) (string, error) {
 }
 
 func copySelected(ctx context.Context) (string, error) {
-	if err := input.WaitReleased(ctx, releaseTimeout); err != nil {
-		return "", err
-	}
+	target := foregroundProcess()
+	// Save first: it can take a while, and Ctrl+C must follow the check that
+	// the modifiers are up closely, or a modifier pressed in between would
+	// turn it into another shortcut (Win+Ctrl+C toggles the colour filter).
 	saved, err := winclip.Save(ctx)
 	if err != nil {
 		return "", fmt.Errorf("save clipboard: %w", err)
+	}
+	if err := input.WaitReleased(ctx, releaseTimeout); err != nil {
+		return "", err
 	}
 	before := winclip.Sequence()
 	if err := input.Ctrl('C'); err != nil {
@@ -106,7 +128,11 @@ func copySelected(ctx context.Context) (string, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if last == before {
-		return "", ErrNoSelection // nothing copied: clipboard untouched
+		// Nothing yet, and the clipboard is untouched. The program may still
+		// copy after we gave up (a large selection in Excel or Word); put the
+		// user's clipboard back if it does.
+		go undoLateCopy(before, target, saved)
+		return "", ErrNoSelection
 	}
 
 	text, err := winclip.Text(ctx)
@@ -114,4 +140,35 @@ func copySelected(ctx context.Context) (string, error) {
 		slog.Warn("restore clipboard after copying the selection", "err", rerr)
 	}
 	return text, err
+}
+
+// undoLateCopy restores saved if the program we sent Ctrl+C to copies
+// within lateCopyWindow. A copy by any other program is left alone.
+func undoLateCopy(before, target uint32, saved []winclip.Item) {
+	if target == 0 {
+		return
+	}
+	for deadline := time.Now().Add(lateCopyWindow); time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+		if winclip.Sequence() == before {
+			continue
+		}
+		if winclip.OwnerProcess() != target {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := winclip.Restore(ctx, saved) // waits for the program to close the clipboard
+		cancel()
+		slog.Info("undid a late copy of the selection", "err", err)
+		return
+	}
+}
+
+// foregroundProcess is the id of the process owning the foreground window.
+func foregroundProcess() uint32 {
+	var pid uint32
+	if h := windows.GetForegroundWindow(); h != 0 {
+		windows.GetWindowThreadProcessId(h, &pid)
+	}
+	return pid
 }
