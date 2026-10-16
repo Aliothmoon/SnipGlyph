@@ -32,3 +32,12 @@ func TestCRLF(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestLF(t *testing.T) {
+	if got := lf(crlf("a\nb\n\nc")); got != "a\nb\n\nc" {
+		t.Fatalf("got %q", got)
+	}
+	if got := lf("lone\rcr"); got != "lone\rcr" {
+		t.Fatalf("got %q", got)
+	}
+}

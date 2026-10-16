@@ -16,6 +16,7 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/hotkey"
 	"SnipGlyph/internal/ocr"
+	"SnipGlyph/internal/translate"
 	"SnipGlyph/internal/ui"
 )
 
@@ -85,6 +86,11 @@ type App struct {
 	bound map[Action]hotkey.Hotkey
 	ocr   *ocr.Client
 	busy  atomic.Bool // a screenshot flow is running
+
+	// Translation engines from the config, rebuilt on reload. UI thread only.
+	engines       []translate.Engine
+	engineIDs     []string
+	defaultEngine int
 }
 
 // Run starts the tray app and blocks until the user exits. It must be called
@@ -109,6 +115,7 @@ func Run(opts Options) error {
 	defer a.hk.Close()
 
 	problems = append(problems, a.registerHotkeys()...)
+	problems = append(problems, a.buildEngines()...)
 	if a.tray, err = ui.NewTray("SnipGlyph", a.menu()); err != nil {
 		return fmt.Errorf("create tray icon: %w", err)
 	}
@@ -204,10 +211,11 @@ func (a *App) menu() []ui.MenuItem {
 	}
 }
 
-// reload re-reads the settings file and rebinds hotkeys. UI thread.
+// reload re-reads the settings file, rebinds hotkeys and rebuilds the
+// translation engines. UI thread.
 func (a *App) reload() {
 	cfgErr := a.loadConfig()
-	problems := a.registerHotkeys()
+	problems := append(a.registerHotkeys(), a.buildEngines()...)
 	if err := a.tray.SetMenu(a.menu()); err != nil {
 		slog.Error("rebuild tray menu", "err", err)
 	}
@@ -215,7 +223,7 @@ func (a *App) reload() {
 	case cfgErr != nil:
 		a.tray.Warn("配置文件有误，已使用默认设置", cfgErr.Error())
 	case len(problems) > 0:
-		a.tray.Warn("部分快捷键不可用", strings.Join(problems, "\n"))
+		a.tray.Warn("配置中有问题", strings.Join(problems, "\n"))
 	default:
 		a.tray.Info("配置已重新加载", "")
 	}
@@ -226,10 +234,12 @@ func (a *App) reload() {
 func (a *App) trigger(act Action) {
 	slog.Info("action triggered", "action", act)
 	switch act {
-	case ScreenshotOCR, ScreenshotTranslate: // translation arrives in M2
+	case ScreenshotOCR, ScreenshotTranslate:
 		go a.screenshotOCR(act, false)
 	case SilentOCR:
 		go a.screenshotOCR(act, true)
+	case InputTranslate:
+		go a.inputTranslate()
 	default:
 		a.tray.Info(act.String(), "功能开发中")
 	}

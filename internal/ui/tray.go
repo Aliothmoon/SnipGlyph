@@ -3,6 +3,7 @@ package ui
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/tailscale/walk"
@@ -12,7 +13,9 @@ import (
 var appIcon = sync.OnceValue(func() *walk.Icon {
 	icon, err := walk.NewIconFromResource("APP")
 	if err != nil {
-		slog.Warn("app icon resource missing, using stock icon", "err", err)
+		// walk errors carry a stack trace; the first line is the message.
+		msg, _, _ := strings.Cut(err.Error(), "\n")
+		slog.Warn("app icon resource missing, using stock icon", "err", msg)
 		return walk.IconApplication()
 	}
 	return icon

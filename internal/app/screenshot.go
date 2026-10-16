@@ -42,12 +42,13 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	img := ocr.Image{Width: b.Dx(), Height: b.Dy(), Pix: shot.Pix}
 	anchor := image.Rect(b.Left, b.Top, b.Right, b.Bottom)
 
-	var popup *ui.Popup
+	translating := act == ScreenshotTranslate
+	var s *session
 	if !silent {
 		ui.Do(func() {
-			popup, err = ui.NewPopup(ui.PopupOptions{Title: "SnipGlyph · " + act.String(), Anchor: anchor})
+			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, translating, true)
 			if err == nil {
-				popup.SetBusy("正在识别…")
+				s.popup.SetSourceBusy("正在识别…")
 			}
 		})
 		if err != nil {
@@ -84,11 +85,14 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	ui.Do(func() {
 		switch {
 		case err != nil:
-			popup.SetError("识别失败：" + err.Error())
+			s.popup.SetSourceError("识别失败：" + err.Error())
 		case text == "":
-			popup.SetError("没有识别到文字")
+			s.popup.SetSourceError("没有识别到文字")
 		default:
-			popup.SetText(text)
+			s.popup.SetSource(text)
+			if translating {
+				a.translate(s, text, a.defaultEngine)
+			}
 		}
 	})
 }

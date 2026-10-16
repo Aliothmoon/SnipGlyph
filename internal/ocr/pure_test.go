@@ -79,3 +79,21 @@ func TestLineConfidence(t *testing.T) {
 		t.Fatalf("empty Confidence = %v, want 0", c)
 	}
 }
+
+func TestUnwrap(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"The quick brown fox\njumps over the dog.\nNext sentence", "The quick brown fox jumps over the dog.\nNext sentence"},
+		{"这是一段被截图\n折行的中文。\n第二段", "这是一段被截图折行的中文。\n第二段"},
+		{"para one\n\npara two", "para one\n\npara two"},
+		{"a transla-\ntion error", "a translation error"},
+		{"well-\nKnown", "well- Known"},
+		{"混合 mixed\ntext 文本", "混合 mixed text 文本"},
+		{"Title:\nbody", "Title:\nbody"},
+		{"  padded  \r\n  lines ", "padded lines"},
+	}
+	for _, tt := range tests {
+		if got := Unwrap(tt.in); got != tt.want {
+			t.Errorf("Unwrap(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

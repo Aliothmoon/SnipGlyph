@@ -13,11 +13,15 @@ CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o bin/snipglyph.exe ./cmd
 
 刚编译出的 exe 第一次启动可能被 Windows Defender 扫描十几秒，之后正常。
 
+排查卡死用调试版：`go build -tags debug ...`，以 `SNIPGLYPH_PPROF=127.0.0.1:6060` 启动，
+再访问 `http://127.0.0.1:6060/debug/pprof/goroutine?debug=2` 看所有 goroutine 的栈。
+
 ## 测试
 
 ```sh
 go test ./...                              # 需要本机装有截图工具，否则 OCR 测试自动跳过
-SNIPGLYPH_UI_TESTS=1 go test ./internal/capture   # 会在屏幕上闪现截图遮罩层
+SNIPGLYPH_UI_TESTS=1 go test ./internal/capture ./internal/ui   # 会在屏幕上闪现遮罩层和弹窗
+SNIPGLYPH_BAIDU_APPID=... SNIPGLYPH_BAIDU_KEY=... go test ./internal/translate   # 调用真实的百度翻译 API
 ```
 
 ## 进程
@@ -32,3 +36,19 @@ SNIPGLYPH_UI_TESTS=1 go test ./internal/capture   # 会在屏幕上闪现截图�
 | `%APPDATA%\SnipGlyph\config.json` | 配置（首次启动写入默认值；改完在托盘菜单点「重新加载配置」） |
 | `%LOCALAPPDATA%\SnipGlyph\logs\snipglyph.log` | 日志，超过 5MB 启动时轮转 |
 | `%LOCALAPPDATA%\SnipGlyph\oneocr\<版本>\` | 从截图工具复制出来的 OneOCR DLL（约 56MB） |
+
+## 翻译配置
+
+设置页（M4）完成前，直接编辑 `config.json` 的 `translate` 部分，然后在托盘菜单点「重新加载配置」：
+
+```json
+"translate": {
+  "engine": "baidu",
+  "target_lang": "zh-Hans",
+  "baidu": { "app_id": "你的 APP ID", "key": "你的密钥", "proxy": "" }
+}
+```
+
+- `key` 可以填明文，程序读取后会立即改写为 `dpapi:...` 密文，只有当前 Windows 账户能解开。
+- `proxy`：空字符串跟随系统代理；`"direct"` 直连；或 `"http://127.0.0.1:7890"`、`"socks5://127.0.0.1:1080"`。
+- `target_lang`：非中文原文的目标语言（中文原文固定译成英文），可选 `zh-Hans`、`zh-Hant`、`en`、`ja`、`ko`、`fr`、`de`、`es`、`ru`。
