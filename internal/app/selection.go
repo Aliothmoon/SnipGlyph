@@ -3,18 +3,17 @@ package app
 import (
 	"context"
 	"errors"
-	"image"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/tailscale/walk"
-	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/textgrab"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
+	"SnipGlyph/internal/winclip"
 )
 
 const grabTimeout = 4 * time.Second
@@ -27,9 +26,7 @@ func (a *App) selectionTranslate() {
 	}
 	defer a.grabbing.Store(false)
 
-	var pt win.POINT
-	win.GetCursorPos(&pt)
-	anchor := image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
+	anchor := cursorAnchor()
 
 	ctx, cancel := context.WithTimeout(walk.App().Context(), grabTimeout)
 	defer cancel()
@@ -51,6 +48,10 @@ func (a *App) selectionTranslate() {
 	case errors.Is(err, textgrab.ErrNoSelection) || (err == nil && text == ""):
 		toast.Show("没有获取到选中的文字", anchor)
 		return
+	case errors.Is(err, winclip.ErrBusy):
+		toast.Show("剪贴板正被其他程序占用，请稍后再试", anchor)
+	case errors.Is(err, context.DeadlineExceeded):
+		toast.Show("取词超时，请再试一次", anchor)
 	case err != nil:
 		toast.Show("取词失败："+err.Error(), anchor)
 		return

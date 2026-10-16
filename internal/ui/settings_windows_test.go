@@ -73,9 +73,9 @@ func TestSettingsWindow(t *testing.T) {
 				saved, savedAuto = &c, auto
 				return nil, nil
 			},
-			Recording: func(on bool) { recording = append(recording, on) },
-			TestBaidu: func(context.Context, config.Baidu) (string, error) { return "你好", nil },
-			OnClose:   func() { close(closed) },
+			ListenKeys: func(on bool) { recording = append(recording, on) },
+			TestBaidu:  func(context.Context, config.Baidu) (string, error) { return "你好", nil },
+			OnClose:    func() { close(closed) },
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -127,6 +127,11 @@ func TestSettingsWindow(t *testing.T) {
 		press(hotkey.ModWin|hotkey.ModAlt, 'Q')
 		if b.value != "Win+Alt+Q" {
 			t.Errorf("recorded %q", b.value)
+		}
+		// Alt+F4 is not recorded: it still closes the window.
+		b.modifiers = func() hotkey.Modifiers { return hotkey.ModAlt }
+		if b.handle(&win.MSG{HWnd: b.le.Handle(), Message: win.WM_SYSKEYDOWN, WParam: win.VK_F4}) || b.value != "Win+Alt+Q" {
+			t.Errorf("Alt+F4 consumed or recorded: value %q", b.value)
 		}
 		press(hotkey.ModShift, 'A') // just a capital A
 		if b.value != "Win+Alt+Q" || s.keyHint.Text() == defaultKeyHint {

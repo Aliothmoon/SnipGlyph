@@ -3,10 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"image"
 	"log/slog"
-
-	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/autostart"
 	"SnipGlyph/internal/config"
@@ -32,12 +29,13 @@ func (a *App) openSettings() {
 		slog.Warn("read autostart", "err", err)
 	}
 	w, err := ui.NewSettings(ui.SettingsOptions{
-		Config:    a.cfg,
-		Autostart: on,
-		Save:      a.saveSettings,
-		Recording: a.pauseHotkeys,
-		TestBaidu: testBaidu,
-		OnClose:   func() { a.settingsWin = nil },
+		Config:     a.cfg,
+		Current:    func() config.Config { return a.cfg },
+		Autostart:  on,
+		Save:       a.saveSettings,
+		ListenKeys: a.pauseHotkeys,
+		TestBaidu:  testBaidu,
+		OnClose:    func() { a.settingsWin = nil },
 	})
 	if err != nil {
 		slog.Error("open settings", "err", err)
@@ -108,7 +106,12 @@ func (a *App) pauseHotkeys(pause bool) {
 		}
 		return
 	}
+	// Problems were reported when the hotkeys were first bound; a hotkey
+	// another program took meanwhile shows up as missing from the menu.
 	a.registerHotkeys()
+	if err := a.tray.SetMenu(a.menu()); err != nil {
+		slog.Error("rebuild tray menu", "err", err)
+	}
 }
 
 // setAutostart points the Run entry at this executable, or removes it.
@@ -178,10 +181,7 @@ func (a *App) openHistoryWindow() {
 // openEntry reopens a saved result in a popup. Edits and new translations
 // there update the same entry. UI thread.
 func (a *App) openEntry(e history.Entry) {
-	var pt win.POINT
-	win.GetCursorPos(&pt)
-	anchor := image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
-	s, err := a.newSession("SnipGlyph · 历史记录", anchor, e.Kind)
+	s, err := a.newSession("SnipGlyph · 历史记录", cursorAnchor(), e.Kind)
 	if err != nil {
 		slog.Error("open popup", "err", err)
 		return

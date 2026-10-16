@@ -25,16 +25,20 @@ const (
 
 // SettingsOptions configures the settings window.
 type SettingsOptions struct {
+	// Config fills the form. Current, if set, returns the settings as they
+	// are when the user saves; fields the form does not show are kept from
+	// it, so a reload while the window was open is not undone.
 	Config    config.Config
+	Current   func() config.Config
 	Autostart bool
 	// Save checks, stores and applies the settings on the UI thread. An
 	// error means nothing was saved; problems went wrong applying them, such
 	// as a hotkey taken by another program.
 	Save func(cfg config.Config, autostart bool) (problems []string, err error)
-	// Recording runs with true when a hotkey box starts listening and with
+	// ListenKeys runs with true when a hotkey box starts listening and with
 	// false when it stops. The app releases its hotkeys meanwhile, or
 	// pressing one would trigger it instead of reaching the box.
-	Recording func(on bool)
+	ListenKeys func(on bool)
 	// TestBaidu translates a sample with the given credentials. It runs on
 	// a background goroutine.
 	TestBaidu func(ctx context.Context, b config.Baidu) (string, error)
@@ -116,7 +120,7 @@ func NewSettings(opts SettingsOptions) (*Settings, error) {
 		}
 		if s.recording {
 			s.recording = false
-			s.opts.Recording(false)
+			s.opts.ListenKeys(false)
 		}
 		if opts.OnClose != nil {
 			opts.OnClose()
@@ -370,7 +374,7 @@ func (s *Settings) focusChanged() {
 		on := slices.ContainsFunc(s.boxes, func(b *hotkeyBox) bool { return b.le.Focused() })
 		if on != s.recording {
 			s.recording = on
-			s.opts.Recording(on)
+			s.opts.ListenKeys(on)
 		}
 		if !on {
 			s.keyInput("")
@@ -381,6 +385,9 @@ func (s *Settings) focusChanged() {
 // collect reads the form into a copy of the config it was opened with.
 func (s *Settings) collect() (config.Config, error) {
 	cfg := s.opts.Config // keeps settings the window does not show
+	if s.opts.Current != nil {
+		cfg = s.opts.Current()
+	}
 	for i, f := range hotkeyFields {
 		*f.field(&cfg.Hotkeys) = s.boxes[i].value
 	}

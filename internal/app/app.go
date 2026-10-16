@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"image"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tailscale/walk"
+	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
 
 	"SnipGlyph/internal/config"
@@ -296,6 +298,14 @@ func (a *App) trigger(act Action) {
 	default:
 		a.tray.Info(act.String(), "功能开发中")
 	}
+}
+
+// cursorAnchor is a one-pixel rectangle at the mouse pointer, for placing
+// popups and toasts on the screen the user is looking at.
+func cursorAnchor() image.Rectangle {
+	var pt win.POINT
+	win.GetCursorPos(&pt)
+	return image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
 }
 
 func openPath(path string) {

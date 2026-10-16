@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"image"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -201,9 +200,7 @@ func (a *App) putClip(id int64, plain bool, after func()) {
 		}()
 		if err != nil {
 			slog.Warn("put clipboard item", "id", id, "err", err)
-			var pt win.POINT
-			win.GetCursorPos(&pt)
-			toast.Show("无法放入剪贴板："+err.Error(), image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1))
+			toast.Show("无法放入剪贴板："+err.Error(), cursorAnchor())
 			return
 		}
 		if after != nil {

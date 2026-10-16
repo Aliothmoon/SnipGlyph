@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/tailscale/walk"
-	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/netx"
@@ -105,7 +104,10 @@ func (a *App) translate(s *session, text string, engine int) {
 	if s.fromOCR {
 		src = ocr.Unwrap(text)
 	}
-	from, to := translate.Direction(src, translate.Lang(a.cfg.Translate.TargetLang))
+	// The guess picks the target; the engine detects the source itself,
+	// which beats the guess on, say, Japanese written all in kanji.
+	_, to := translate.Direction(src, translate.Lang(a.cfg.Translate.TargetLang))
+	from := translate.Auto
 
 	if s.cancel != nil {
 		s.cancel()
@@ -160,9 +162,7 @@ func direction(from, to translate.Lang) string {
 // prefilled with the clipboard text, selected so typing replaces it. It
 // does not translate on its own: the clipboard may hold anything.
 func (a *App) inputTranslate() {
-	var pt win.POINT
-	win.GetCursorPos(&pt)
-	anchor := image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
+	anchor := cursorAnchor()
 	ui.Do(func() {
 		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, history.Input)
 		if err != nil {
