@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/walk"
 
 	"SnipGlyph/internal/capture"
+	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
@@ -45,10 +46,14 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	anchor := image.Rect(b.Left, b.Top, b.Right, b.Bottom)
 
 	translating := act == ScreenshotTranslate
+	kind := history.OCR
+	if translating {
+		kind = history.Screenshot
+	}
 	var s *session
 	if !silent {
 		ui.Do(func() {
-			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, true)
+			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, kind)
 			if err == nil {
 				s.popup.SetSourceBusy("正在识别…")
 			}
@@ -76,7 +81,11 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 		case text == "":
 			toast.Show("没有识别到文字", anchor)
 		default:
-			ui.Do(func() { err = walk.Clipboard().SetText(text) })
+			ui.Do(func() {
+				if err = walk.Clipboard().SetText(text); err == nil {
+					a.remember(&record{kind: kind}, text, "", "")
+				}
+			})
 			if err != nil {
 				toast.Show("复制到剪贴板失败："+err.Error(), anchor)
 				return
@@ -94,6 +103,7 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 			s.popup.SetSourceError("没有识别到文字")
 		default:
 			s.popup.SetSource(text)
+			a.remember(s.rec, text, "", "")
 			if translating {
 				a.translate(s, text, a.defaultEngine)
 			}

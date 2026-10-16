@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"SnipGlyph/internal/config"
+	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/hotkey"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/textgrab"
@@ -71,6 +72,10 @@ type Options struct {
 	ConfigPath string
 	ConfigDir  string
 	LogDir     string
+	// HistoryPath is the history database.
+	HistoryPath string
+	// Exe is this program, for the autostart entry.
+	Exe string
 	// OCRWorker returns the command for an OCR worker process: one that
 	// calls ocr.ServeWorker on its stdin/stdout.
 	OCRWorker func() *exec.Cmd
@@ -94,6 +99,14 @@ type App struct {
 	engines       []translate.Engine
 	engineIDs     []string
 	defaultEngine int
+
+	hist     *history.Store // nil when the database could not be opened
+	histq    chan func()    // writes, run in order by one goroutine
+	histDone chan struct{}
+
+	// Open windows, nil when closed. UI thread only.
+	settingsWin *ui.Settings
+	histWin     *ui.HistoryWindow
 }
 
 // Run starts the tray app and blocks until the user exits. It must be called
@@ -119,6 +132,10 @@ func Run(opts Options) error {
 
 	problems = append(problems, a.registerHotkeys()...)
 	problems = append(problems, a.buildEngines()...)
+	if p := a.openHistory(); p != "" {
+		problems = append(problems, p)
+	}
+	defer a.closeHistory()
 	if a.tray, err = ui.NewTray("SnipGlyph", a.menu()); err != nil {
 		return fmt.Errorf("create tray icon: %w", err)
 	}
@@ -162,16 +179,18 @@ func (a *App) loadConfig() error {
 // registerHotkeys (re)binds every action and returns human-readable problems.
 func (a *App) registerHotkeys() []string {
 	a.bound = map[Action]hotkey.Hotkey{}
+	// Release them all first, so two actions can swap hotkeys.
+	for _, act := range allActions {
+		_ = a.hk.Unregister(int(act))
+	}
 	var problems []string
 	for _, act := range allActions {
 		s := act.hotkey(a.cfg.Hotkeys)
 		if s == "" {
-			_ = a.hk.Unregister(int(act))
 			continue
 		}
 		hk, err := hotkey.Parse(s)
 		if err != nil {
-			_ = a.hk.Unregister(int(act))
 			problems = append(problems, fmt.Sprintf("%s（%s）：格式错误", act, s))
 			slog.Warn("bad hotkey", "action", act, "hotkey", s, "err", err)
 			continue
@@ -205,7 +224,9 @@ func (a *App) menu() []ui.MenuItem {
 		item(ScreenshotTranslate),
 		item(InputTranslate),
 		{},
-		{Text: "设置", Disabled: true},
+		{Text: "历史记录", OnClick: a.openHistoryWindow},
+		{Text: "设置", OnClick: a.openSettings},
+		{},
 		{Text: "重新加载配置", OnClick: a.reload},
 		{Text: "打开配置目录", OnClick: func() { openPath(a.opts.ConfigDir) }},
 		{Text: "打开日志目录", OnClick: func() { openPath(a.opts.LogDir) }},
@@ -221,6 +242,9 @@ func (a *App) reload() {
 	problems := append(a.registerHotkeys(), a.buildEngines()...)
 	if err := a.tray.SetMenu(a.menu()); err != nil {
 		slog.Error("rebuild tray menu", "err", err)
+	}
+	if a.histWin != nil {
+		a.histWin.SetRecording(a.cfg.History.Enabled)
 	}
 	switch {
 	case cfgErr != nil:

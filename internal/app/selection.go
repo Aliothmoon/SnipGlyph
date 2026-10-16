@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 
+	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/textgrab"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
@@ -50,12 +51,13 @@ func (a *App) selectionTranslate() {
 	}
 
 	ui.Do(func() {
-		s, err := a.newSession("SnipGlyph · 划词翻译", anchor, false)
+		s, err := a.newSession("SnipGlyph · 划词翻译", anchor, history.Selection)
 		if err != nil {
 			slog.Error("open popup", "err", err)
 			return
 		}
 		s.popup.SetSource(text)
+		a.remember(s.rec, text, "", "")
 		a.translate(s, text, a.defaultEngine)
 	})
 }

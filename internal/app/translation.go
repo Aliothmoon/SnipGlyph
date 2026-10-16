@@ -13,6 +13,7 @@ import (
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 
+	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/netx"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/translate"
@@ -22,14 +23,14 @@ import (
 const translateTimeout = 60 * time.Second
 
 const noEngineMsg = "还没有配置翻译引擎。\n" +
-	"请在 %APPDATA%\\SnipGlyph\\config.json 的 translate.baidu 里填写 app_id 和 key，" +
-	"然后在托盘菜单点「重新加载配置」。"
+	"请在托盘菜单的「设置」里填写百度翻译的 APP ID 和密钥。"
 
 // session is one popup and its translation requests. UI thread only.
 type session struct {
 	popup   *ui.Popup
 	closed  bool
 	fromOCR bool               // source text has OCR line breaks to undo
+	rec     *record            // its history entry
 	seq     int                // bumped per request; stale results are dropped
 	cancel  context.CancelFunc // of the request in flight
 }
@@ -54,10 +55,13 @@ func (a *App) buildEngines() []string {
 	return problems
 }
 
-// newSession opens a popup; its translation pane opens with the first
-// translation. UI thread.
-func (a *App) newSession(title string, anchor image.Rectangle, fromOCR bool) (*session, error) {
-	s := &session{fromOCR: fromOCR}
+// newSession opens a popup for text of the given kind; its translation
+// pane opens with the first translation. UI thread.
+func (a *App) newSession(title string, anchor image.Rectangle, kind history.Kind) (*session, error) {
+	s := &session{
+		fromOCR: kind == history.OCR || kind == history.Screenshot,
+		rec:     &record{kind: kind},
+	}
 	names := make([]string, len(a.engines))
 	for i, e := range a.engines {
 		names[i] = e.Name()
@@ -138,6 +142,7 @@ func (a *App) translate(s *session, text string, engine int) {
 					from = res.From
 				}
 				s.popup.SetTranslation(direction(from, to), res.Text)
+				a.remember(s.rec, text, res.Text, eng.Name())
 			}
 		})
 	}()
@@ -159,7 +164,7 @@ func (a *App) inputTranslate() {
 	win.GetCursorPos(&pt)
 	anchor := image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
 	ui.Do(func() {
-		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, false)
+		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, history.Input)
 		if err != nil {
 			slog.Error("open popup", "err", err)
 			a.tray.Warn("输入翻译", "无法打开窗口："+err.Error())
