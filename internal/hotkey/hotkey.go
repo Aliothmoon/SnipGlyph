@@ -78,9 +78,10 @@ const (
 )
 
 // Parse parses strings like "Win+Alt+Shift+C". Modifier names are
-// case-insensitive and may appear in any order. A hotkey without modifiers
-// is only accepted for function keys, PrintScreen and Pause, so that a typo
-// can never swallow an ordinary key system-wide.
+// case-insensitive and may appear in any order. A hotkey without Win, Ctrl
+// or Alt is only accepted for function keys, PrintScreen and Pause, so that
+// a typo can never swallow an ordinary key system-wide (Shift+A is just a
+// capital A).
 func Parse(s string) (Hotkey, error) {
 	parts := strings.Split(s, "+")
 	var hk Hotkey
@@ -106,14 +107,20 @@ func Parse(s string) (Hotkey, error) {
 		}
 		hk.Key = vk
 	}
-	if hk.Mods == 0 && !bareKeyAllowed(hk.Key) {
-		return Hotkey{}, fmt.Errorf("hotkey %q: needs at least one modifier", s)
+	if hk.Mods&^ModShift == 0 && !bareKeyAllowed(hk.Key) {
+		return Hotkey{}, fmt.Errorf("hotkey %q: needs Win, Ctrl or Alt", s)
 	}
 	return hk, nil
 }
 
 // String returns the canonical form, e.g. "Win+Alt+Shift+C".
 func (h Hotkey) String() string {
+	return h.Prefix() + keyName(h.Key)
+}
+
+// Prefix returns the modifiers in canonical form, each followed by "+",
+// e.g. "Win+Alt+".
+func (h Hotkey) Prefix() string {
 	var b strings.Builder
 	for _, m := range modifierOrder {
 		if h.Mods&m.mod != 0 {
@@ -121,7 +128,6 @@ func (h Hotkey) String() string {
 			b.WriteByte('+')
 		}
 	}
-	b.WriteString(keyName(h.Key))
 	return b.String()
 }
 

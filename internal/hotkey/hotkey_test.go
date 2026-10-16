@@ -13,6 +13,7 @@ func TestParse(t *testing.T) {
 		{"Control+Alt+9", Hotkey{ModCtrl | ModAlt, '9'}, "Ctrl+Alt+9"},
 		{"Ctrl+F12", Hotkey{ModCtrl, 0x7B}, "Ctrl+F12"},
 		{"F1", Hotkey{0, 0x70}, "F1"},
+		{"Shift+F3", Hotkey{ModShift, 0x72}, "Shift+F3"},
 		{"printscreen", Hotkey{0, 0x2C}, "PrintScreen"},
 		{"Alt+`", Hotkey{ModAlt, 0xC0}, "Alt+`"},
 		{"Win+Alt+Space", Hotkey{ModWin | ModAlt, 0x20}, "Win+Alt+Space"},
@@ -36,6 +37,7 @@ func TestParseErrors(t *testing.T) {
 	for _, in := range []string{
 		"",
 		"C",         // bare ordinary key
+		"Shift+A",   // just a capital A
 		"Win+",      // missing key
 		"Win+Alt",   // modifier as key
 		"Hyper+C",   // unknown modifier
