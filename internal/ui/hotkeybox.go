@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"errors"
+
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
@@ -77,13 +79,19 @@ func (b *hotkeyBox) handle(msg *win.MSG) bool {
 		return true
 	}
 	hk := hotkey.Hotkey{Mods: mods, Key: vk}
-	if _, err := hotkey.Parse(hk.String()); err != nil {
+	switch err := hk.Valid(); {
+	case errors.Is(err, hotkey.ErrReserved):
+		// Let it do its usual job: Alt+F4 still closes the window.
 		b.le.SetText(b.value)
-		if mods&^hotkey.ModShift == 0 {
-			b.onInput("快捷键要包含 Win、Ctrl 或 Alt（F1–F24、PrintScreen、Pause 除外）")
-		} else {
-			b.onInput("不支持这个按键")
-		}
+		b.onInput(hk.String() + " 是系统和各程序通用的组合键，不能用作快捷键")
+		return false
+	case errors.Is(err, hotkey.ErrNeedsModifier):
+		b.le.SetText(b.value)
+		b.onInput("快捷键要包含 Win、Ctrl 或 Alt（F1–F24、PrintScreen、Pause 除外）")
+		return true
+	case err != nil:
+		b.le.SetText(b.value)
+		b.onInput("不支持这个按键")
 		return true
 	}
 	b.set(hk.String())

@@ -3,6 +3,7 @@
 package hotkey
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -107,10 +108,50 @@ func Parse(s string) (Hotkey, error) {
 		}
 		hk.Key = vk
 	}
-	if hk.Mods&^ModShift == 0 && !bareKeyAllowed(hk.Key) {
-		return Hotkey{}, fmt.Errorf("hotkey %q: needs Win, Ctrl or Alt", s)
+	if err := hk.Valid(); err != nil {
+		return Hotkey{}, fmt.Errorf("hotkey %q: %w", s, err)
 	}
 	return hk, nil
+}
+
+var (
+	// ErrNeedsModifier means the combination lacks Win, Ctrl and Alt.
+	ErrNeedsModifier = errors.New("needs Win, Ctrl or Alt")
+	// ErrReserved means Windows or nearly every program relies on the
+	// combination: taken system-wide it would stop working everywhere.
+	ErrReserved = errors.New("reserved by Windows and other programs")
+	// ErrUnknownKey means the key has no name hotkeys can use.
+	ErrUnknownKey = errors.New("unsupported key")
+)
+
+// reserved lists combinations that must keep their usual meaning.
+var reserved = map[Hotkey]bool{
+	{ModAlt, vkF1 + 3}:                     true, // Alt+F4 closes windows
+	{ModAlt, 0x20}:                         true, // Alt+Space opens the window menu
+	{ModCtrl | ModAlt, keyNames["Delete"]}: true,
+	{ModCtrl, 'A'}:                         true,
+	{ModCtrl, 'C'}:                         true,
+	{ModCtrl, 'S'}:                         true,
+	{ModCtrl, 'V'}:                         true,
+	{ModCtrl, 'X'}:                         true,
+	{ModCtrl, 'Y'}:                         true,
+	{ModCtrl, 'Z'}:                         true,
+}
+
+// Valid reports whether h can be a hotkey: a key with a name, at least one
+// of Win, Ctrl or Alt (Shift+A is just a capital A) unless it is a function
+// key, PrintScreen or Pause, and not a reserved combination.
+func (h Hotkey) Valid() error {
+	if _, ok := parseKey(keyName(h.Key)); !ok {
+		return ErrUnknownKey
+	}
+	if h.Mods&^ModShift == 0 && !bareKeyAllowed(h.Key) {
+		return ErrNeedsModifier
+	}
+	if reserved[h] {
+		return ErrReserved
+	}
+	return nil
 }
 
 // String returns the canonical form, e.g. "Win+Alt+Shift+C".

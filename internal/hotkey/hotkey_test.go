@@ -38,6 +38,9 @@ func TestParseErrors(t *testing.T) {
 		"",
 		"C",         // bare ordinary key
 		"Shift+A",   // just a capital A
+		"Alt+F4",    // reserved: closes windows
+		"Alt+Space", // reserved: window menu
+		"Ctrl+C",    // reserved: copy
 		"Win+",      // missing key
 		"Win+Alt",   // modifier as key
 		"Hyper+C",   // unknown modifier
