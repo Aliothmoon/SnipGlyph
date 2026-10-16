@@ -1,8 +1,10 @@
 package toast
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestOpacityTimeline(t *testing.T) {
@@ -49,5 +51,19 @@ func TestCoverage(t *testing.T) {
 	// The arc crosses pixel (5, 5) at 45° (20 - 20/√2 ≈ 5.86): partly covered.
 	if c := coverage(5, 5, w, h, r); c <= 0 || c >= 1 {
 		t.Errorf("arc pixel = %v, want partial", c)
+	}
+}
+
+func TestClip(t *testing.T) {
+	if got := clip("  short  "); got != "short" {
+		t.Errorf("clip(short) = %q", got)
+	}
+	lines := clip(strings.Repeat("line\n", 10))
+	if strings.Count(lines, "\n") != maxLines-1 || !strings.HasSuffix(lines, "…") {
+		t.Errorf("clip(10 lines) = %q", lines)
+	}
+	long := clip(strings.Repeat("字", 500))
+	if n := utf8.RuneCountInString(long); n != maxRunes+1 || !strings.HasSuffix(long, "…") {
+		t.Errorf("clip(500 runes) has %d runes", n)
 	}
 }

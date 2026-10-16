@@ -6,6 +6,7 @@ package toast
 
 import (
 	"math"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -17,6 +18,30 @@ const (
 	minHold = 1400 * time.Millisecond
 	maxHold = 4 * time.Second
 )
+
+// Limits on a toast's text: it is a glance, not a dialog, and an error
+// carrying a whole HTTP body must not grow taller than the screen.
+const (
+	maxLines = 4
+	maxRunes = 160
+)
+
+// clip shortens text to maxLines lines and maxRunes characters.
+func clip(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	cut := len(lines) > maxLines
+	if cut {
+		lines = lines[:maxLines]
+	}
+	text = strings.Join(lines, "\n")
+	if r := []rune(text); len(r) > maxRunes {
+		text, cut = string(r[:maxRunes]), true
+	}
+	if cut {
+		text = strings.TrimRight(text, " \r\n") + "…"
+	}
+	return text
+}
 
 // holdFor gives longer messages more time to be read.
 func holdFor(text string) time.Duration {

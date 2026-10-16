@@ -42,6 +42,7 @@ var (
 // physical pixels) and returns at once. A newer toast replaces an older one.
 // Safe to call from any goroutine.
 func Show(text string, anchor image.Rectangle) {
+	text = clip(text)
 	mu.Lock()
 	if dismiss != nil {
 		close(dismiss)
