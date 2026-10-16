@@ -14,8 +14,31 @@ import (
 const FileName = "config.json"
 
 type Config struct {
-	Hotkeys Hotkeys `json:"hotkeys"`
+	Hotkeys   Hotkeys   `json:"hotkeys"`
+	Translate Translate `json:"translate"`
 }
+
+type Translate struct {
+	// Engine is the default engine: "baidu". When empty or not configured,
+	// the first configured engine is used.
+	Engine string `json:"engine"`
+	// TargetLang is what non-Chinese text is translated into; Chinese text
+	// always goes to English.
+	TargetLang string `json:"target_lang"`
+	Baidu      Baidu  `json:"baidu"`
+}
+
+// Baidu holds credentials for the Baidu general translation API
+// (https://fanyi-api.baidu.com).
+type Baidu struct {
+	AppID string `json:"app_id"`
+	Key   Secret `json:"key"`
+	// Proxy is "" to follow the Windows proxy, "direct", or a proxy URL
+	// such as "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080".
+	Proxy string `json:"proxy"`
+}
+
+func (b Baidu) Configured() bool { return b.AppID != "" && b.Key != "" }
 
 // Hotkeys holds one hotkey string per action, in the format accepted by
 // hotkey.Parse. An empty string disables the action's hotkey.
@@ -35,6 +58,9 @@ func Default() Config {
 			ScreenshotTranslate: "Win+Alt+S",
 			SelectionTranslate:  "Win+Alt+X",
 			InputTranslate:      "Win+Alt+I",
+		},
+		Translate: Translate{
+			TargetLang: "zh-Hans",
 		},
 	}
 }
