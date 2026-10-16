@@ -12,22 +12,14 @@ import (
 
 var procMonitorFromRect = windows.NewLazySystemDLL("user32.dll").NewProc("MonitorFromRect")
 
-// Popup sizes in device-independent pixels: source only, and with the
-// translation pane.
-const (
-	popupW         = 460
-	popupH         = 240
-	popupExpandedH = 420
-)
+const defaultHint = "Ctrl+Enter 翻译 · Esc 关闭"
 
 // PopupOptions configures a result popup.
 type PopupOptions struct {
 	Title string
-	// Anchor is the screen region (physical pixels) the popup belongs to. It
-	// opens just below it, or above when there is no room below.
+	// Anchor is the screen region (physical pixels) the popup belongs to; it
+	// opens centred on that region's monitor.
 	Anchor image.Rectangle
-	// Translation opens the popup with the translation pane showing.
-	Translation bool
 	// Engines names the translation engines; with none, translating is off.
 	Engines []string
 	Engine  int // index of the initially selected engine
@@ -38,29 +30,35 @@ type PopupOptions struct {
 	OnClose func()
 }
 
-// Popup is a small always-on-top window with editable source text and an
-// optional translation pane. It closes when it loses focus unless pinned.
-// All methods must run on the UI thread and are no-ops once it is closed.
+// Popup is an always-on-top window with two cards: editable source text,
+// and a translation pane that opens on the first translation. It sizes
+// itself to its text and closes when it loses focus unless pinned. All
+// methods must run on the UI thread and are no-ops once it is closed.
 type Popup struct {
 	opts PopupOptions
 	mw   *walk.MainWindow
 
-	source   *walk.TextEdit
-	trBar    *walk.Composite
-	dir      *walk.Label
-	engine   *walk.ComboBox
-	result   *walk.TextEdit
+	source  *walk.TextEdit
+	copySrc *walk.LinkLabel
+
+	trCard  *walk.Composite // the whole translation pane
+	dir     *walk.Label
+	engine  *walk.ComboBox
+	copyRes *walk.LinkLabel
+	result  *walk.TextEdit
+
 	pin      *walk.CheckBox
+	hint     *walk.Label
 	translBt *walk.PushButton
-	copySrc  *walk.PushButton
-	copyRes  *walk.PushButton
-	expanded bool
-	closing  bool
+
+	expanded    bool
+	closing     bool
+	settingText bool // the source text is being set by code, not typed
 }
 
 // NewPopup creates and shows the popup. UI thread only.
 func NewPopup(opts PopupOptions) (*Popup, error) {
-	mw, err := walk.NewMainWindowWithCfg(&walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true})
+	mw, err := walk.NewMainWindowWithCfg(&walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
 	if err != nil {
 		return nil, err
 	}
@@ -101,14 +99,14 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 	// Tool window: no taskbar button. Set while hidden so it takes effect.
 	ex := win.GetWindowLong(h, win.GWL_EXSTYLE)
 	win.SetWindowLong(h, win.GWL_EXSTYLE, ex|win.WS_EX_TOOLWINDOW)
-	height := popupH
-	if opts.Translation {
-		height = popupExpandedH
-		p.setExpanded()
-	}
-	if err := mw.SetBoundsPixels(placement(opts.Anchor, height)); err != nil {
+	tintCaption(h, colorWindow)
+	// Move onto the target monitor first, so the window adopts its DPI, then
+	// size it to the content.
+	work, dpi := monitorOf(opts.Anchor)
+	if err := mw.SetBoundsPixels(centerIn(work, fitMinW*dpi/96, 200*dpi/96)); err != nil {
 		return nil, err
 	}
+	p.fit(work, centreInWork)
 	win.SetWindowPos(h, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE|win.SWP_NOSIZE)
 	mw.Show()
 	win.SetForegroundWindow(h)
@@ -126,32 +124,68 @@ func (p *Popup) build() error {
 	// paints over the top of the content.
 	setShown(mw.ToolBar(), false)
 	mw.SetIcon(appIcon())
+	setFont(mw, uiFont()) // inherited by every child without its own font
+	setBackground(mw, colorWindow)
 	if err := mw.SetTitle(p.opts.Title); err != nil {
 		return err
 	}
 	layout := walk.NewVBoxLayout()
-	layout.SetMargins(walk.Margins{HNear: 8, VNear: 8, HFar: 8, VFar: 8})
-	layout.SetSpacing(6)
+	layout.SetMargins(walk.Margins{HNear: 12, VNear: 10, HFar: 12, VFar: 10})
+	layout.SetSpacing(10)
 	if err := mw.SetLayout(layout); err != nil {
 		return err
 	}
 
-	var err error
-	if p.source, err = walk.NewTextEditWithStyle(mw, win.WS_VSCROLL); err != nil {
+	// Source card.
+	srcCard, src, err := card(mw)
+	if err != nil {
+		return err
+	}
+	head, err := row(src)
+	if err != nil {
+		return err
+	}
+	if _, err := label(head, "原文", colorMuted, titleFont()); err != nil {
+		return err
+	}
+	if _, err := walk.NewHSpacer(head); err != nil {
+		return err
+	}
+	if p.copySrc, err = link(head, "复制", func() { p.copyText(p.copySrc, p.source) }); err != nil {
+		return err
+	}
+	if p.source, err = textBox(src); err != nil {
 		return err
 	}
 	p.source.KeyDown().Attach(p.onKey)
+	// Typing (input translation, fixing OCR text) updates what can be copied
+	// or translated, and grows the box with the text.
+	p.source.TextChanged().Attach(func() {
+		if p.source.ReadOnly() || p.settingText {
+			return
+		}
+		has := p.source.TextLength() > 0
+		setLinkText(p.copySrc, "复制", true)
+		p.copySrc.SetEnabled(has)
+		p.translBt.SetEnabled(has && len(p.opts.Engines) > 0)
+		p.refitAnchored(keepTop)
+	})
 
-	if p.trBar, err = hbox(mw); err != nil {
+	// Translation card.
+	var tr *walk.Composite
+	if p.trCard, tr, err = card(mw); err != nil {
 		return err
 	}
-	if p.dir, err = walk.NewLabel(p.trBar); err != nil {
+	if head, err = row(tr); err != nil {
 		return err
 	}
-	if _, err := walk.NewHSpacer(p.trBar); err != nil {
+	if p.dir, err = label(head, "译文", colorMuted, titleFont()); err != nil {
 		return err
 	}
-	if p.engine, err = walk.NewDropDownBox(p.trBar); err != nil {
+	if _, err := walk.NewHSpacer(head); err != nil {
+		return err
+	}
+	if p.engine, err = walk.NewDropDownBox(head); err != nil {
 		return err
 	}
 	if err := p.engine.SetModel(p.opts.Engines); err != nil {
@@ -160,78 +194,55 @@ func (p *Popup) build() error {
 	if len(p.opts.Engines) > 0 {
 		p.engine.SetCurrentIndex(p.opts.Engine)
 	}
+	p.engine.SetToolTipText("翻译引擎")
 	p.engine.CurrentIndexChanged().Attach(func() {
 		if p.expanded && p.Source() != "" {
 			p.requestTranslation()
 		}
 	})
-
-	if p.result, err = walk.NewTextEditWithStyle(mw, win.WS_VSCROLL); err != nil {
+	if p.copyRes, err = link(head, "复制", func() { p.copyText(p.copyRes, p.result) }); err != nil {
+		return err
+	}
+	if p.result, err = textBox(tr); err != nil {
 		return err
 	}
 	p.result.SetReadOnly(true)
 	p.result.KeyDown().Attach(p.onKey)
 
-	bar, err := hbox(mw)
+	// Both cards share the height.
+	layout.SetStretchFactor(srcCard, 1)
+	layout.SetStretchFactor(p.trCard, 1)
+
+	// Footer.
+	foot, err := row(mw)
 	if err != nil {
 		return err
 	}
-	if p.pin, err = walk.NewCheckBox(bar); err != nil {
+	if p.pin, err = walk.NewCheckBox(foot); err != nil {
 		return err
 	}
 	p.pin.SetText("钉住")
-	if _, err := walk.NewHSpacer(bar); err != nil {
+	p.pin.SetToolTipText("钉住后点别处不会关闭")
+	if p.hint, err = label(foot, defaultHint, colorMuted, nil); err != nil {
 		return err
 	}
-	if p.translBt, err = button(bar, "翻译", p.requestTranslation); err != nil {
+	if _, err := walk.NewHSpacer(foot); err != nil {
 		return err
 	}
-	if p.copySrc, err = button(bar, "复制", func() { p.copyText(p.copySrc, p.source) }); err != nil {
+	if p.translBt, err = walk.NewPushButton(foot); err != nil {
 		return err
 	}
-	if p.copyRes, err = button(bar, "复制译文", func() { p.copyText(p.copyRes, p.result) }); err != nil {
-		return err
-	}
-	p.translBt.SetToolTipText("Ctrl+Enter")
+	p.translBt.SetText("翻译")
+	p.translBt.SetMinMaxSize(walk.Size{Width: 88}, walk.Size{})
+	p.translBt.Clicked().Attach(p.requestTranslation)
+	// The accent ring of a default button marks the main action.
+	p.translBt.SendMessage(win.BM_SETSTYLE, win.BS_DEFPUSHBUTTON, 1)
+
 	p.translBt.SetEnabled(false)
 	p.copySrc.SetEnabled(false)
 	p.copyRes.SetEnabled(false)
-	// Typing into the box (input translation, edits to OCR text) updates
-	// what can be copied or translated.
-	p.source.TextChanged().Attach(func() {
-		if p.source.ReadOnly() {
-			return
-		}
-		has := p.source.TextLength() > 0
-		p.copySrc.SetText("复制")
-		p.copySrc.SetEnabled(has)
-		p.translBt.SetEnabled(has && len(p.opts.Engines) > 0)
-	})
-
-	setShown(p.trBar, false)
-	setShown(p.result, false)
-	setShown(p.copyRes, false)
+	setShown(p.trCard, false) // opens on the first translation
 	return nil
-}
-
-func hbox(parent walk.Container) (*walk.Composite, error) {
-	c, err := walk.NewComposite(parent)
-	if err != nil {
-		return nil, err
-	}
-	l := walk.NewHBoxLayout()
-	l.SetMargins(walk.Margins{})
-	return c, c.SetLayout(l)
-}
-
-func button(parent walk.Container, text string, onClick func()) (*walk.PushButton, error) {
-	b, err := walk.NewPushButton(parent)
-	if err != nil {
-		return nil, err
-	}
-	b.SetText(text)
-	b.Clicked().Attach(onClick)
-	return b, nil
 }
 
 func (p *Popup) onKey(key walk.Key) {
@@ -264,12 +275,12 @@ func (p *Popup) requestTranslation() {
 	p.opts.OnTranslate(text, p.engine.CurrentIndex())
 }
 
-func (p *Popup) copyText(btn *walk.PushButton, from *walk.TextEdit) {
-	if err := walk.Clipboard().SetText(from.Text()); err != nil {
+func (p *Popup) copyText(ll *walk.LinkLabel, from *walk.TextEdit) {
+	if err := walk.Clipboard().SetText(lf(from.Text())); err != nil {
 		slog.Warn("copy to clipboard", "err", err)
 		return
 	}
-	btn.SetText("已复制")
+	setLinkText(ll, "已复制", false)
 }
 
 // Source is the text in the source box, as edited by the user.
@@ -285,10 +296,12 @@ func (p *Popup) SetSourceBusy(msg string) {
 	if p.gone() {
 		return
 	}
-	p.source.SetText(msg)
 	p.source.SetReadOnly(true)
+	p.source.SetTextColor(colorMuted)
+	p.source.SetText(msg)
 	p.copySrc.SetEnabled(false)
 	p.translBt.SetEnabled(false)
+	p.refit()
 }
 
 // SetSource shows text the user can edit, copy and translate.
@@ -297,11 +310,23 @@ func (p *Popup) SetSource(text string) {
 		return
 	}
 	p.source.SetReadOnly(false)
+	p.source.SetTextColor(colorText)
+	p.settingText = true
 	p.source.SetText(crlf(text))
-	p.copySrc.SetText("复制")
+	p.settingText = false
+	setLinkText(p.copySrc, "复制", true)
 	p.copySrc.SetEnabled(text != "")
 	p.translBt.SetEnabled(text != "" && len(p.opts.Engines) > 0)
+	p.refit()
 	p.source.SetFocus()
+}
+
+// SelectSource selects all source text, so typing replaces it.
+func (p *Popup) SelectSource() {
+	if p.gone() {
+		return
+	}
+	p.source.SetTextSelection(0, -1)
 }
 
 // SetSourceError shows a failure in place of the source text.
@@ -310,17 +335,19 @@ func (p *Popup) SetSourceError(msg string) {
 		return
 	}
 	p.source.SetReadOnly(true)
+	p.source.SetTextColor(colorError)
 	p.source.SetText(crlf(msg))
 	p.copySrc.SetEnabled(false)
 	p.translBt.SetEnabled(false)
+	p.refit()
 }
 
-// SetHint shows a line of guidance above the (empty) translation pane.
+// SetHint replaces the footer's keyboard hint with guidance.
 func (p *Popup) SetHint(text string) {
 	if p.gone() {
 		return
 	}
-	p.dir.SetText(text)
+	p.hint.SetText(text)
 }
 
 // ShowTranslating opens the translation pane with a placeholder.
@@ -330,8 +357,10 @@ func (p *Popup) ShowTranslating(direction string) {
 	}
 	p.expand()
 	p.dir.SetText(direction)
+	p.result.SetTextColor(colorMuted)
 	p.result.SetText("翻译中…")
 	p.copyRes.SetEnabled(false)
+	p.refit()
 }
 
 // SetTranslation shows (possibly partial) translated text.
@@ -343,9 +372,11 @@ func (p *Popup) SetTranslation(direction, text string) {
 	if direction != "" {
 		p.dir.SetText(direction)
 	}
+	p.result.SetTextColor(colorText)
 	p.result.SetText(crlf(text))
-	p.copyRes.SetText("复制译文")
+	setLinkText(p.copyRes, "复制", true)
 	p.copyRes.SetEnabled(text != "")
+	p.refit()
 }
 
 // SetTranslationError shows a failure in the translation pane.
@@ -354,37 +385,30 @@ func (p *Popup) SetTranslationError(msg string) {
 		return
 	}
 	p.expand()
+	p.result.SetTextColor(colorError)
 	p.result.SetText(crlf(msg))
 	p.copyRes.SetEnabled(false)
+	p.refit()
 }
 
 func (p *Popup) gone() bool { return p.closing || p.mw.IsDisposed() }
 
-func (p *Popup) setExpanded() {
-	p.expanded = true
-	setShown(p.trBar, true)
-	setShown(p.result, true)
-	setShown(p.copyRes, true)
-}
-
-// expand shows the translation pane, growing the window downwards (or
-// upwards when the work area ends) the first time.
+// expand opens the translation pane; the next refit makes room for it.
 func (p *Popup) expand() {
 	if p.expanded {
 		return
 	}
-	p.setExpanded()
+	p.expanded = true
+	setShown(p.trCard, true)
+}
+
+// refit resizes the popup to its current text.
+func (p *Popup) refit() { p.refitAnchored(keepCentre) }
+
+func (p *Popup) refitAnchored(how anchoring) {
 	h := p.mw.Handle()
-	b := p.mw.BoundsPixels()
-	dpi := int(win.GetDpiForWindow(h))
-	b.Height = popupExpandedH * dpi / 96
-	mi := win.MONITORINFO{}
-	mi.CbSize = uint32(unsafe.Sizeof(mi))
-	win.GetMonitorInfo(win.MonitorFromWindow(h, win.MONITOR_DEFAULTTONEAREST), &mi)
-	if bottom := int(mi.RcWork.Bottom); b.Y+b.Height > bottom {
-		b.Y = max(int(mi.RcWork.Top), bottom-b.Height)
-	}
-	p.mw.SetBoundsPixels(b)
+	work := workArea(win.MonitorFromWindow(h, win.MONITOR_DEFAULTTONEAREST))
+	p.fit(work, how)
 }
 
 // crlf converts line breaks for the Win32 EDIT control.
@@ -411,30 +435,31 @@ func lf(s string) string {
 	return string(out)
 }
 
-// placement returns popup bounds in physical pixels for a popup of height
-// h (DIPs): below anchor, or above it when the monitor's work area has no
-// room below, clamped to the work area.
-func placement(anchor image.Rectangle, h int) walk.Rectangle {
+// monitorOf returns the work area and DPI of the monitor nearest anchor.
+func monitorOf(anchor image.Rectangle) (image.Rectangle, int) {
 	ar := win.RECT{Left: int32(anchor.Min.X), Top: int32(anchor.Min.Y), Right: int32(anchor.Max.X), Bottom: int32(anchor.Max.Y)}
 	hmon, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&ar)), win.MONITOR_DEFAULTTONEAREST)
-	mi := win.MONITORINFO{}
-	mi.CbSize = uint32(unsafe.Sizeof(mi))
-	win.GetMonitorInfo(win.HMONITOR(hmon), &mi)
-	work := image.Rect(int(mi.RcWork.Left), int(mi.RcWork.Top), int(mi.RcWork.Right), int(mi.RcWork.Bottom))
 	var dpiX, dpiY uint32 = 96, 96
 	win.GetDpiForMonitor(win.HMONITOR(hmon), win.MDT_EFFECTIVE_DPI, &dpiX, &dpiY)
-	return placeIn(anchor, work, popupW*int(dpiX)/96, h*int(dpiY)/96, 8*int(dpiY)/96)
+	return workArea(win.HMONITOR(hmon)), int(dpiY)
 }
 
-func placeIn(anchor, work image.Rectangle, w, h, gap int) walk.Rectangle {
-	x := anchor.Min.X
-	y := anchor.Max.Y + gap
-	if y+h > work.Max.Y {
-		y = anchor.Min.Y - gap - h
+func workArea(hmon win.HMONITOR) image.Rectangle {
+	mi := win.MONITORINFO{}
+	mi.CbSize = uint32(unsafe.Sizeof(mi))
+	win.GetMonitorInfo(hmon, &mi)
+	return image.Rect(int(mi.RcWork.Left), int(mi.RcWork.Top), int(mi.RcWork.Right), int(mi.RcWork.Bottom))
+}
+
+// centerIn centres a w x h window in work, shrinking it to fit if needed.
+func centerIn(work image.Rectangle, w, h int) walk.Rectangle {
+	w, h = min(w, work.Dx()), min(h, work.Dy())
+	return walk.Rectangle{
+		X:      work.Min.X + (work.Dx()-w)/2,
+		Y:      work.Min.Y + (work.Dy()-h)/2,
+		Width:  w,
+		Height: h,
 	}
-	x = min(max(x, work.Min.X), work.Max.X-w)
-	y = min(max(y, work.Min.Y), work.Max.Y-h)
-	return walk.Rectangle{X: x, Y: y, Width: w, Height: h}
 }
 
 // setShown shows or hides w. Unlike walk's SetVisible it also works before

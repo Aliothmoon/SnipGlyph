@@ -7,23 +7,50 @@ import (
 	"github.com/tailscale/walk"
 )
 
-func TestPlaceIn(t *testing.T) {
+func TestCenterIn(t *testing.T) {
+	// A second monitor to the right, below a taskbar-less top edge.
+	work := image.Rect(1920, 0, 3840, 1040)
+	if got, want := centerIn(work, 960, 510), (walk.Rectangle{X: 2400, Y: 265, Width: 960, Height: 510}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	// Too big for a small screen: shrunk to the work area.
+	small := image.Rect(0, 0, 800, 560)
+	if got, want := centerIn(small, 960, 870), (walk.Rectangle{X: 0, Y: 0, Width: 800, Height: 560}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestResizeAround(t *testing.T) {
 	work := image.Rect(0, 0, 1920, 1040)
-	const w, h, gap = 440, 240, 8
 	tests := []struct {
-		name   string
-		anchor image.Rectangle
-		want   walk.Rectangle
+		name string
+		b    walk.Rectangle
+		w, h int
+		want walk.Rectangle
 	}{
-		{"below", image.Rect(100, 100, 500, 300), walk.Rectangle{X: 100, Y: 308, Width: w, Height: h}},
-		{"above when no room below", image.Rect(100, 700, 500, 900), walk.Rectangle{X: 100, Y: 452, Width: w, Height: h}},
-		{"clamped right", image.Rect(1800, 100, 1900, 200), walk.Rectangle{X: 1480, Y: 208, Width: w, Height: h}},
-		{"clamped when no room either way", image.Rect(0, 100, 1920, 1000), walk.Rectangle{X: 0, Y: 0, Width: w, Height: h}},
+		{"keeps the centre", walk.Rectangle{X: 480, Y: 265, Width: 960, Height: 510}, 1000, 870, walk.Rectangle{X: 460, Y: 85, Width: 1000, Height: 870}},
+		{"shrinks around the centre", walk.Rectangle{X: 480, Y: 265, Width: 960, Height: 510}, 600, 300, walk.Rectangle{X: 660, Y: 370, Width: 600, Height: 300}},
+		{"pushed down from the top", walk.Rectangle{X: 0, Y: 10, Width: 960, Height: 200}, 960, 600, walk.Rectangle{X: 0, Y: 0, Width: 960, Height: 600}},
+		{"pushed up from the bottom", walk.Rectangle{X: 0, Y: 900, Width: 960, Height: 100}, 960, 600, walk.Rectangle{X: 0, Y: 440, Width: 960, Height: 600}},
+		{"clamped to the work area", walk.Rectangle{X: 0, Y: 0, Width: 960, Height: 100}, 3000, 2000, walk.Rectangle{X: 0, Y: 0, Width: 1920, Height: 1040}},
 	}
 	for _, tt := range tests {
-		if got := placeIn(tt.anchor, work, w, h, gap); got != tt.want {
+		if got := resizeAround(tt.b, tt.w, tt.h, work); got != tt.want {
 			t.Errorf("%s: got %+v, want %+v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestGrowDown(t *testing.T) {
+	work := image.Rect(0, 0, 1920, 1040)
+	b := walk.Rectangle{X: 660, Y: 370, Width: 600, Height: 300}
+	if got, want := growDown(b, 700, 420, work), (walk.Rectangle{X: 610, Y: 370, Width: 700, Height: 420}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	// Near the bottom it is pushed up rather than running off screen.
+	b.Y = 700
+	if got, want := growDown(b, 600, 420, work), (walk.Rectangle{X: 660, Y: 620, Width: 600, Height: 420}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
