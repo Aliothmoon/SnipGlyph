@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -38,6 +39,7 @@ type Summary struct {
 	Source   string
 	Pinned   bool
 	Rich     bool // has HTML or RTF besides the text
+	Count    int  // of paths, for Files
 	Used     time.Time
 	HasThumb bool
 }
@@ -52,6 +54,7 @@ var (
 // Store is an open clipboard database. It is safe for concurrent use.
 type Store struct {
 	db    *sql.DB
+	mu    sync.Mutex
 	limit int
 }
 
@@ -145,7 +148,19 @@ func (s *Store) migrate() error {
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
-func now() int64 { return time.Now().UnixMilli() }
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// nextUsed is the order stamp for an item going to the top: the time,
+// nudged past the newest stamp so two copies in one millisecond still
+// keep their order.
+func nextUsed(ctx context.Context, q querier) int64 {
+	t := time.Now().UnixMilli()
+	var newest sql.NullInt64
+	q.QueryRowContext(ctx, `SELECT max(used) FROM items`).Scan(&newest)
+	return max(t, newest.Int64+1)
+}
 
 // Record files a new copy in the default tab. When the tab already holds
 // the same content, that item moves to the top and takes the new formats
@@ -162,7 +177,7 @@ func (s *Store) Record(ctx context.Context, it Item) (int64, error) {
 	case err == nil:
 		_, err = tx.ExecContext(ctx,
 			`UPDATE items SET html = ?, rtf = ?, png = ?, thumb = ?, width = ?, height = ?, source = ?, used = ? WHERE id = ?`,
-			it.HTML, it.RTF, it.PNG, it.Thumb, it.Width, it.Height, it.Source, now(), id)
+			it.HTML, it.RTF, it.PNG, it.Thumb, it.Width, it.Height, it.Source, nextUsed(ctx, tx), id)
 	case errors.Is(err, sql.ErrNoRows):
 		id, err = insert(ctx, tx, DefaultTab, it)
 	}
@@ -171,18 +186,24 @@ func (s *Store) Record(ctx context.Context, it Item) (int64, error) {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM items WHERE id IN (
 		SELECT id FROM items WHERE tab = ? AND pinned = 0 ORDER BY used DESC, id DESC LIMIT -1 OFFSET ?)`,
-		DefaultTab, s.limit); err != nil {
+		DefaultTab, s.currentLimit()); err != nil {
 		return 0, err
 	}
 	return id, tx.Commit()
 }
 
+func (s *Store) currentLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.limit
+}
+
 func insert(ctx context.Context, tx *sql.Tx, tab int64, it Item) (int64, error) {
-	t := now()
 	res, err := tx.ExecContext(ctx, `INSERT INTO items
 		(tab, kind, text, html, rtf, png, thumb, width, height, source, hash, pinned, created, used)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		tab, string(it.Kind), it.Text, it.HTML, it.RTF, it.PNG, it.Thumb, it.Width, it.Height, it.Source, it.Hash, it.Pinned, t, t)
+		tab, string(it.Kind), it.Text, it.HTML, it.RTF, it.PNG, it.Thumb, it.Width, it.Height, it.Source, it.Hash, it.Pinned,
+		time.Now().UnixMilli(), nextUsed(ctx, tx))
 	if err != nil {
 		return 0, err
 	}
@@ -194,7 +215,8 @@ func insert(ctx context.Context, tx *sql.Tx, tab int64, it Item) (int64, error) 
 func (s *Store) List(ctx context.Context, tab int64, query string, limit int) ([]Summary, error) {
 	where, args := searchFilter(query)
 	q := `SELECT id, kind, substr(text, 1, 400), width, height, source, pinned,
-		html IS NOT NULL OR rtf IS NOT NULL, used, thumb IS NOT NULL
+		html IS NOT NULL OR rtf IS NOT NULL, used, thumb IS NOT NULL,
+		CASE kind WHEN 'files' THEN length(text) - length(replace(text, char(10), '')) + 1 ELSE 0 END
 		FROM items WHERE tab = ?`
 	if where != "" {
 		q += " AND " + where
@@ -211,7 +233,7 @@ func (s *Store) List(ctx context.Context, tab int64, query string, limit int) ([
 		var sm Summary
 		var kind string
 		var used int64
-		if err := rows.Scan(&sm.ID, &kind, &sm.Preview, &sm.Width, &sm.Height, &sm.Source, &sm.Pinned, &sm.Rich, &used, &sm.HasThumb); err != nil {
+		if err := rows.Scan(&sm.ID, &kind, &sm.Preview, &sm.Width, &sm.Height, &sm.Source, &sm.Pinned, &sm.Rich, &used, &sm.HasThumb, &sm.Count); err != nil {
 			return nil, err
 		}
 		sm.Kind, sm.Used = Kind(kind), time.UnixMilli(used)
@@ -296,18 +318,33 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	return s.exec(ctx, `DELETE FROM items WHERE id = ?`, id)
 }
 
+// Touch moves an item to the top of its tab, as when it is used again.
+func (s *Store) Touch(ctx context.Context, id int64) error {
+	return s.exec(ctx, `UPDATE items SET used = ? WHERE id = ?`, nextUsed(ctx, s.db), id)
+}
+
+// SetLimit changes how many unpinned items the default tab keeps, from
+// the next Record on.
+func (s *Store) SetLimit(limit int) {
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	s.mu.Lock()
+	s.limit = limit
+	s.mu.Unlock()
+}
+
 // MoveTo puts an item in another tab, at the top.
 func (s *Store) MoveTo(ctx context.Context, id, tab int64) error {
-	return s.exec(ctx, `UPDATE items SET tab = ?, used = ? WHERE id = ?`, tab, now(), id)
+	return s.exec(ctx, `UPDATE items SET tab = ?, used = ? WHERE id = ?`, tab, nextUsed(ctx, s.db), id)
 }
 
 // CopyTo adds a copy of an item to another tab, at the top.
 func (s *Store) CopyTo(ctx context.Context, id, tab int64) (int64, error) {
-	t := now()
 	res, err := s.db.ExecContext(ctx, `INSERT INTO items
 		(tab, kind, text, html, rtf, png, thumb, width, height, source, hash, pinned, created, used)
 		SELECT ?, kind, text, html, rtf, png, thumb, width, height, source, hash, 0, ?, ? FROM items WHERE id = ?`,
-		tab, t, t, id)
+		tab, time.Now().UnixMilli(), nextUsed(ctx, s.db), id)
 	if err != nil {
 		return 0, err
 	}

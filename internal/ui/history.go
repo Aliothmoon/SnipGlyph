@@ -11,7 +11,6 @@ import (
 
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
-	"golang.org/x/sys/windows"
 
 	"SnipGlyph/internal/history"
 )
@@ -135,9 +134,7 @@ func (h *HistoryWindow) build() error {
 	if h.search, err = walk.NewLineEdit(top); err != nil {
 		return err
 	}
-	// Shown even while the box has focus, which it has on opening.
-	cue, _ := windows.UTF16PtrFromString("搜索原文或译文，空格分隔多个关键字（Ctrl+F）")
-	h.search.SendMessage(emSetCueBanner, 1, uintptr(unsafe.Pointer(cue)))
+	setCueBanner(h.search, "搜索原文或译文，空格分隔多个关键字（Ctrl+F）")
 	h.search.TextChanged().Attach(h.searchSoon)
 	if h.clearBt, err = walk.NewPushButton(top); err != nil {
 		return err

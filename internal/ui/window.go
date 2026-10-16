@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"log/slog"
+	"unsafe"
 
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
@@ -107,4 +108,11 @@ func openURL(url string) {
 	if err != nil {
 		slog.Warn("open url", "url", url, "err", err)
 	}
+}
+
+// setCueBanner shows a grey hint in an empty line edit, even while it has
+// the focus (which a search box has from the start).
+func setCueBanner(le *walk.LineEdit, text string) {
+	cue, _ := windows.UTF16PtrFromString(text)
+	le.SendMessage(emSetCueBanner, 1, uintptr(unsafe.Pointer(cue)))
 }

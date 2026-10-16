@@ -11,6 +11,7 @@ import (
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 
+	"SnipGlyph/internal/cliphist"
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/translate"
@@ -51,6 +52,7 @@ var hotkeyFields = []struct {
 	{"截图翻译", func(h *config.Hotkeys) *string { return &h.ScreenshotTranslate }},
 	{"划词翻译", func(h *config.Hotkeys) *string { return &h.SelectionTranslate }},
 	{"输入翻译", func(h *config.Hotkeys) *string { return &h.InputTranslate }},
+	{"剪贴板历史", func(h *config.Hotkeys) *string { return &h.ClipboardHistory }},
 }
 
 // Proxy choices, by index in the proxy drop-down.
@@ -67,6 +69,7 @@ type Settings struct {
 
 	autostart *walk.CheckBox
 	history   *walk.CheckBox
+	clipboard *walk.CheckBox
 	boxes     []*hotkeyBox
 	keyHint   *walk.TextLabel
 
@@ -155,6 +158,13 @@ func (s *Settings) build() error {
 		return err
 	}
 	if s.history, err = checkBox(general, "保存历史记录（只存文字，最近 "+strconv.Itoa(history.DefaultLimit)+" 条）", cfg.History.Enabled); err != nil {
+		return err
+	}
+	clipLimit := cfg.Clipboard.Limit
+	if clipLimit <= 0 {
+		clipLimit = cliphist.DefaultLimit
+	}
+	if s.clipboard, err = checkBox(general, "记录剪贴板历史（文字、图片、文件路径；最近 "+strconv.Itoa(clipLimit)+" 条，置顶不计）", cfg.Clipboard.Enabled); err != nil {
 		return err
 	}
 
@@ -375,6 +385,7 @@ func (s *Settings) collect() (config.Config, error) {
 		*f.field(&cfg.Hotkeys) = s.boxes[i].value
 	}
 	cfg.History.Enabled = s.history.Checked()
+	cfg.Clipboard.Enabled = s.clipboard.Checked()
 	if i := s.target.CurrentIndex(); i >= 0 {
 		cfg.Translate.TargetLang = string(s.langs[i])
 	}
