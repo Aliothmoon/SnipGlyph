@@ -79,3 +79,36 @@ func TestClipboardRoundTrip(t *testing.T) {
 		t.Errorf("custom format restored as %v", got)
 	}
 }
+
+// TestWatch sees its own write. Real clipboard: SNIPGLYPH_CLIPBOARD_TESTS.
+func TestWatch(t *testing.T) {
+	if os.Getenv("SNIPGLYPH_CLIPBOARD_TESTS") == "" {
+		t.Skip("set SNIPGLYPH_CLIPBOARD_TESTS=1 to use the real clipboard")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	original, err := Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Restore(context.Background(), original)
+
+	changed := make(chan uint32, 8)
+	wctx, stop := context.WithCancel(ctx)
+	defer stop()
+	if err := Watch(wctx, func() { changed <- Sequence() }); err != nil {
+		t.Fatal(err)
+	}
+	before := Sequence()
+	if err := Write(ctx, []Item{{CFUnicodeText, UTF16("watched")}}, WriteOptions{Hidden: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case seq := <-changed:
+		if seq == before {
+			t.Errorf("notified without a change (sequence %d)", seq)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no change notification")
+	}
+}
