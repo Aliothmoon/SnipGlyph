@@ -22,6 +22,7 @@ CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o bin/snipglyph.exe ./cmd
 go test ./...                              # 需要本机装有截图工具，否则 OCR 测试自动跳过
 SNIPGLYPH_UI_TESTS=1 go test ./internal/capture ./internal/ui ./internal/toast   # 会在屏幕上闪现遮罩层、弹窗和 toast
 SNIPGLYPH_BAIDU_APPID=... SNIPGLYPH_BAIDU_KEY=... go test ./internal/translate   # 调用真实的百度翻译 API
+SNIPGLYPH_CLIPBOARD_TESTS=1 go test ./internal/textgrab   # 读写真实剪贴板，结束时还原
 ```
 
 ## 进程
