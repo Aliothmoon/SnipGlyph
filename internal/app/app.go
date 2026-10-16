@@ -16,6 +16,7 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/hotkey"
 	"SnipGlyph/internal/ocr"
+	"SnipGlyph/internal/textgrab"
 	"SnipGlyph/internal/translate"
 	"SnipGlyph/internal/ui"
 )
@@ -86,6 +87,8 @@ type App struct {
 	bound map[Action]hotkey.Hotkey
 	ocr   *ocr.Client
 	busy  atomic.Bool // a screenshot flow is running
+
+	grabbing atomic.Bool // a selection is being read
 
 	// Translation engines from the config, rebuilt on reload. UI thread only.
 	engines       []translate.Engine
@@ -238,6 +241,10 @@ func (a *App) trigger(act Action) {
 		go a.screenshotOCR(act, false)
 	case SilentOCR:
 		go a.screenshotOCR(act, true)
+	case SelectionTranslate:
+		// Right away, while the hotkey's modifiers are still down.
+		textgrab.MaskHotkey()
+		go a.selectionTranslate()
 	case InputTranslate:
 		go a.inputTranslate()
 	default:
