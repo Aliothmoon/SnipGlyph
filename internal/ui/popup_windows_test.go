@@ -44,7 +44,6 @@ func requireUITests(t *testing.T) {
 }
 
 const (
-	emGetRect             = 0x00B2
 	emGetFirstVisibleLine = 0x00CE
 )
 

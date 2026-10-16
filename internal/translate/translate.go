@@ -37,6 +37,9 @@ var langNames = map[Lang]string{
 	Russian:            "俄语",
 }
 
+// Targets are the languages offered as the translation target.
+var Targets = []Lang{ChineseSimplified, ChineseTraditional, English, Japanese, Korean, French, German, Spanish, Russian}
+
 // Name is the Chinese display name, or the tag itself if unknown.
 func (l Lang) Name() string {
 	if n, ok := langNames[l]; ok {

@@ -16,6 +16,13 @@ const FileName = "config.json"
 type Config struct {
 	Hotkeys   Hotkeys   `json:"hotkeys"`
 	Translate Translate `json:"translate"`
+	History   History   `json:"history"`
+}
+
+type History struct {
+	// Enabled records the text of OCR and translation results for the
+	// history window.
+	Enabled bool `json:"enabled"`
 }
 
 type Translate struct {
@@ -62,6 +69,7 @@ func Default() Config {
 		Translate: Translate{
 			TargetLang: "zh-Hans",
 		},
+		History: History{Enabled: true},
 	}
 }
 

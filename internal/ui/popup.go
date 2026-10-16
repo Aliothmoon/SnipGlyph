@@ -58,7 +58,7 @@ type Popup struct {
 
 // NewPopup creates and shows the popup. UI thread only.
 func NewPopup(opts PopupOptions) (*Popup, error) {
-	mw, err := walk.NewMainWindowWithCfg(&walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
+	mw, err := newWindow(opts.Title, &walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,6 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 	// Tool window: no taskbar button. Set while hidden so it takes effect.
 	ex := win.GetWindowLong(h, win.GWL_EXSTYLE)
 	win.SetWindowLong(h, win.GWL_EXSTYLE, ex|win.WS_EX_TOOLWINDOW)
-	tintCaption(h, colorWindow)
 	// Move onto the target monitor first, so the window adopts its DPI, then
 	// size it to the content.
 	work, dpi := monitorOf(opts.Anchor)
@@ -117,18 +116,6 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 
 func (p *Popup) build() error {
 	mw := p.mw
-	mw.SetExitOnClose(false) // walk would otherwise end the app with this window
-	mw.SetPersistent(false)
-	win.SetMenu(mw.Handle(), 0) // drop walk's empty menu bar
-	// walk's layout ignores an empty toolbar, but the toolbar window still
-	// paints over the top of the content.
-	setShown(mw.ToolBar(), false)
-	mw.SetIcon(appIcon())
-	setFont(mw, uiFont()) // inherited by every child without its own font
-	setBackground(mw, colorWindow)
-	if err := mw.SetTitle(p.opts.Title); err != nil {
-		return err
-	}
 	layout := walk.NewVBoxLayout()
 	layout.SetMargins(walk.Margins{HNear: 12, VNear: 10, HFar: 12, VFar: 10})
 	layout.SetSpacing(10)
