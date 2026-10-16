@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/tailscale/walk v0.0.0-20260702185836-28b80ea70d3b
 	github.com/tailscale/win v0.0.0-20260619195133-2d76c33a64c1
+	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.60.1
 )
