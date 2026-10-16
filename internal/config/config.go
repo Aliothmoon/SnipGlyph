@@ -53,8 +53,8 @@ type Hotkeys struct {
 func Default() Config {
 	return Config{
 		Hotkeys: Hotkeys{
-			ScreenshotOCR:       "Win+Alt+C",
-			SilentOCR:           "Win+Alt+Shift+C",
+			ScreenshotOCR:       "Win+Alt+Shift+C",
+			SilentOCR:           "Win+Alt+C",
 			ScreenshotTranslate: "Win+Alt+S",
 			SelectionTranslate:  "Win+Alt+X",
 			InputTranslate:      "Win+Alt+I",
