@@ -6,6 +6,7 @@ import (
 	"image"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -53,8 +54,9 @@ func (a *App) buildEngines() []string {
 	return problems
 }
 
-// newSession opens a popup. UI thread.
-func (a *App) newSession(title string, anchor image.Rectangle, translation, fromOCR bool) (*session, error) {
+// newSession opens a popup; its translation pane opens with the first
+// translation. UI thread.
+func (a *App) newSession(title string, anchor image.Rectangle, fromOCR bool) (*session, error) {
 	s := &session{fromOCR: fromOCR}
 	names := make([]string, len(a.engines))
 	for i, e := range a.engines {
@@ -63,7 +65,6 @@ func (a *App) newSession(title string, anchor image.Rectangle, translation, from
 	p, err := ui.NewPopup(ui.PopupOptions{
 		Title:       title,
 		Anchor:      anchor,
-		Translation: translation,
 		Engines:     names,
 		Engine:      a.defaultEngine,
 		OnTranslate: func(text string, engine int) { a.translate(s, text, engine) },
@@ -150,24 +151,34 @@ func direction(from, to translate.Lang) string {
 	return src + " → " + to.Name()
 }
 
-// inputTranslate opens an empty popup at the cursor for typed or pasted
-// text.
+// inputTranslate opens a popup on the cursor's monitor for typed text,
+// prefilled with the clipboard text, selected so typing replaces it. It
+// does not translate on its own: the clipboard may hold anything.
 func (a *App) inputTranslate() {
 	var pt win.POINT
 	win.GetCursorPos(&pt)
 	anchor := image.Rect(int(pt.X), int(pt.Y), int(pt.X)+1, int(pt.Y)+1)
 	ui.Do(func() {
-		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, true, false)
+		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, false)
 		if err != nil {
 			slog.Error("open popup", "err", err)
 			a.tray.Warn("输入翻译", "无法打开窗口："+err.Error())
 			return
 		}
-		s.popup.SetSource("")
-		if len(a.engines) == 0 {
-			s.popup.SetTranslationError(noEngineMsg)
-			return
+		clip, err := walk.Clipboard().Text()
+		if err != nil {
+			slog.Warn("read clipboard", "err", err)
 		}
-		s.popup.SetHint("输入或粘贴文字，按 Ctrl+Enter 翻译")
+		clip = strings.TrimSpace(clip)
+		s.popup.SetSource(clip)
+		s.popup.SelectSource()
+		switch {
+		case len(a.engines) == 0:
+			s.popup.SetTranslationError(noEngineMsg)
+		case clip != "":
+			s.popup.SetHint("已填入剪贴板内容，按 Ctrl+Enter 翻译")
+		default:
+			s.popup.SetHint("输入或粘贴文字，按 Ctrl+Enter 翻译")
+		}
 	})
 }

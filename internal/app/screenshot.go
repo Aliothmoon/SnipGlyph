@@ -12,14 +12,16 @@ import (
 
 	"SnipGlyph/internal/capture"
 	"SnipGlyph/internal/ocr"
+	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
 )
 
 const ocrTimeout = 30 * time.Second
 
 // screenshotOCR lets the user pick a region and recognises its text. Silent
-// mode copies the text straight to the clipboard; otherwise a popup next to
-// the region shows it. Runs on its own goroutine.
+// mode copies the text straight to the clipboard and confirms with a toast;
+// otherwise a popup centred on the region's screen shows it. Runs on its
+// own goroutine.
 func (a *App) screenshotOCR(act Action, silent bool) {
 	if !a.busy.CompareAndSwap(false, true) {
 		return // one screenshot at a time; a second hotkey press is ignored
@@ -46,7 +48,7 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	var s *session
 	if !silent {
 		ui.Do(func() {
-			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, translating, true)
+			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, true)
 			if err == nil {
 				s.popup.SetSourceBusy("正在识别…")
 			}
@@ -66,18 +68,20 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	text := res.Text()
 
 	if silent {
+		// A toast on the selection's screen, not a system notification:
+		// lighter, and it does not pile up in the notification centre.
 		switch {
 		case err != nil:
-			a.tray.Warn(act.String(), "识别失败："+err.Error())
+			toast.Show("识别失败："+err.Error(), anchor)
 		case text == "":
-			a.tray.Info(act.String(), "没有识别到文字")
+			toast.Show("没有识别到文字", anchor)
 		default:
 			ui.Do(func() { err = walk.Clipboard().SetText(text) })
 			if err != nil {
-				a.tray.Warn(act.String(), "复制到剪贴板失败："+err.Error())
+				toast.Show("复制到剪贴板失败："+err.Error(), anchor)
 				return
 			}
-			a.tray.Info(act.String(), fmt.Sprintf("已复制 %d 行文字", len(res.Lines)))
+			toast.Show(fmt.Sprintf("已复制 %d 行文字", len(res.Lines)), anchor)
 		}
 		return
 	}
