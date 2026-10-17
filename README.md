@@ -1,6 +1,33 @@
 # SnipGlyph
 
-Windows 11 上的 OCR + 划词翻译托盘工具。方案见 [docs/PLAN.md](docs/PLAN.md)，OneOCR 技术细节见 [docs/oneocr.md](docs/oneocr.md)。
+Windows 11 上的 OCR + 划词翻译 + 剪贴板历史托盘工具，纯 Go 编写。方案见 [docs/PLAN.md](docs/PLAN.md)，OneOCR 技术细节见 [docs/oneocr.md](docs/oneocr.md)。
+
+## 功能
+
+| 功能 | 默认快捷键 |
+|---|---|
+| 截图 OCR（结果弹窗，可编辑、可翻译） | `Win+Alt+Shift+C` |
+| 静默 OCR（识别后直接复制） | `Win+Alt+C` |
+| 截图翻译 | `Win+Alt+S` |
+| 划词翻译（选中文字后按） | `Win+Alt+X` |
+| 输入翻译（预填剪贴板文字） | `Win+Alt+I` |
+| 剪贴板历史（文字 / 图片 / 文件，分标签、搜索、置顶） | `Alt+V` |
+
+另有翻译历史记录、设置页、开机自启。OCR 用的是 Windows 11 截图工具自带的离线引擎 OneOCR；翻译目前接入百度翻译（需自备 APP ID 和密钥）。
+
+## 下载与运行
+
+从 [Releases](https://github.com/Aliothmoon/SnipGlyph/releases) 下载 `snipglyph-*-windows-amd64.exe`，直接运行即可，常驻托盘。
+
+- 需要 Windows 11 x64，并装有新版「截图工具」（Snipping Tool）：OCR 用的是它自带的引擎。
+- exe 没有签名，首次运行可能被 SmartScreen 拦下，点「更多信息 → 仍要运行」。
+- 以普通权限运行；给以管理员身份运行的程序划词、粘贴不起作用（系统的 UIPI 限制）。
+
+## 声明
+
+- 本仓库和发布的 exe **不包含任何微软文件**。OneOCR 的 DLL 和模型属于微软，程序运行时从本机已安装的截图工具里读取。
+- 这种用法不在截图工具的官方支持范围内，截图工具更新后可能失效；使用前请自行评估是否符合其许可条款。
+- 与 Microsoft 无关，也未经其认可。
 
 ## 构建
 
