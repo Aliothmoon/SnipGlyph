@@ -1,6 +1,6 @@
 # SnipGlyph
 
-Windows 11 上的 OCR + 划词翻译 + 剪贴板历史托盘工具，纯 Go 编写。方案见 [docs/PLAN.md](docs/PLAN.md)，OneOCR 技术细节见 [docs/oneocr.md](docs/oneocr.md)。
+Windows 11 上的 OCR + 划词翻译 + 剪贴板历史托盘工具，纯 Go 编写。OneOCR 技术细节见 [docs/oneocr.md](docs/oneocr.md)。
 
 ## 功能
 
