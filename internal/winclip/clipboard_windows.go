@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -305,8 +306,18 @@ func Text(ctx context.Context) (string, error) {
 	return c.Text()
 }
 
-// UTF16 encodes s as CF_UNICODETEXT data, NUL-terminated.
+// SetText replaces the clipboard content with text. Whatever was there
+// goes, so a program that prefers a picture cannot paste the old one.
+func SetText(ctx context.Context, s string, opts WriteOptions) error {
+	return Write(ctx, []Item{{CFUnicodeText, UTF16(s)}}, opts)
+}
+
+// UTF16 encodes s as CF_UNICODETEXT data, NUL-terminated. A NUL in s ends
+// the text there, as it would for every program reading it.
 func UTF16(s string) []byte {
+	if i := strings.IndexByte(s, 0); i >= 0 {
+		s = s[:i]
+	}
 	u, _ := windows.UTF16FromString(s)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&u[0])), len(u)*2)
 }

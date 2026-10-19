@@ -370,11 +370,7 @@ func (h *HistoryWindow) copy(ll *walk.LinkLabel, text func(history.Entry) string
 	if !ok {
 		return
 	}
-	if err := walk.Clipboard().SetText(text(e)); err != nil {
-		slog.Warn("copy to clipboard", "err", err)
-		return
-	}
-	setLinkText(ll, "已复制", false)
+	copyToClipboard(ll, text(e))
 }
 
 func (h *HistoryWindow) openCurrent() {

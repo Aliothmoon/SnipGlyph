@@ -1,13 +1,17 @@
 package ui
 
 import (
+	"context"
 	"image"
 	"log/slog"
+	"time"
 	"unsafe"
 
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
+
+	"SnipGlyph/internal/winclip"
 )
 
 var procMonitorFromRect = windows.NewLazySystemDLL("user32.dll").NewProc("MonitorFromRect")
@@ -324,12 +328,30 @@ func (p *Popup) requestTranslation() {
 	p.opts.OnTranslate(text, p.engine.CurrentIndex())
 }
 
+// copyToClipboard replaces the clipboard content with text and shows how it
+// went on ll. The clipboard may be held by another program for a while, so
+// the waiting happens off the UI thread. UI thread.
+func copyToClipboard(ll *walk.LinkLabel, text string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := winclip.SetText(ctx, text, winclip.WriteOptions{})
+		cancel()
+		walk.App().Synchronize(func() {
+			if ll.IsDisposed() {
+				return
+			}
+			if err != nil {
+				slog.Warn("copy to clipboard", "err", err)
+				setLinkText(ll, "复制失败，重试", true)
+				return
+			}
+			setLinkText(ll, "已复制", false)
+		})
+	}()
+}
+
 func (p *Popup) copyText(ll *walk.LinkLabel, from *walk.TextEdit) {
-	if err := walk.Clipboard().SetText(lf(from.Text())); err != nil {
-		slog.Warn("copy to clipboard", "err", err)
-		return
-	}
-	setLinkText(ll, "已复制", false)
+	copyToClipboard(ll, lf(from.Text()))
 }
 
 // Source is the text in the source box, as edited by the user.

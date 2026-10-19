@@ -15,6 +15,7 @@ import (
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
+	"SnipGlyph/internal/winclip"
 )
 
 const ocrTimeout = 30 * time.Second
@@ -81,15 +82,14 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 		case text == "":
 			toast.Show("没有识别到文字", anchor)
 		default:
-			ui.Do(func() {
-				if err = walk.Clipboard().SetText(text); err == nil {
-					a.remember(&record{kind: kind}, text, "", "")
-				}
-			})
+			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			err = winclip.SetText(wctx, text, winclip.WriteOptions{})
+			cancel()
 			if err != nil {
 				toast.Show("复制到剪贴板失败："+err.Error(), anchor)
 				return
 			}
+			ui.Do(func() { a.remember(&record{kind: kind}, text, "", "") })
 			toast.Show(fmt.Sprintf("已复制 %d 行文字", len(res.Lines)), anchor)
 		}
 		return

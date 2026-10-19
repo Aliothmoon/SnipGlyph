@@ -3,6 +3,7 @@ package winclip
 import (
 	"bytes"
 	"context"
+	"image"
 	"os"
 	"testing"
 	"time"
@@ -77,6 +78,63 @@ func TestClipboardRoundTrip(t *testing.T) {
 	}
 	if got := findItem(again, custom); !bytes.HasPrefix(got, blob) {
 		t.Errorf("custom format restored as %v", got)
+	}
+}
+
+func TestUTF16StopsAtNUL(t *testing.T) {
+	if got, want := UTF16("ab\x00cd"), UTF16("ab"); !bytes.Equal(got, want) {
+		t.Fatalf("UTF16 = %v, want %v", got, want)
+	}
+	if got := UTF16(""); !bytes.Equal(got, []byte{0, 0}) {
+		t.Fatalf("UTF16(\"\") = %v", got)
+	}
+}
+
+// TestSetTextReplacesPicture copies text over a copied screenshot: no
+// picture may stay behind for programs that prefer one to paste. Real
+// clipboard: SNIPGLYPH_CLIPBOARD_TESTS.
+func TestSetTextReplacesPicture(t *testing.T) {
+	if os.Getenv("SNIPGLYPH_CLIPBOARD_TESTS") == "" {
+		t.Skip("set SNIPGLYPH_CLIPBOARD_TESTS=1 to use the real clipboard")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	original, err := Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := Restore(rctx, original); err != nil {
+			t.Errorf("put the original clipboard back: %v", err)
+		}
+	}()
+
+	png := RegisterFormat("PNG")
+	picture := []Item{{CFDIB, EncodeDIB(image.NewRGBA(image.Rect(0, 0, 2, 2)))}, {png, []byte("png")}}
+	if err := Restore(ctx, picture); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetText(ctx, "识别结果", WriteOptions{Hidden: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formats := c.Formats()
+	text, _ := c.Text()
+	c.Close()
+	for _, f := range formats {
+		switch f {
+		case CFBitmap, CFDIB, CFDIBV5, png:
+			t.Errorf("picture format %d left on the clipboard", f)
+		}
+	}
+	if text != "识别结果" {
+		t.Errorf("text %q", text)
 	}
 }
 
