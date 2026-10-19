@@ -47,6 +47,17 @@ func TestFitPadsSmallImages(t *testing.T) {
 	}
 }
 
+func TestFitPadsOneShortSide(t *testing.T) {
+	img := solid(200, minSide-1, 10, 20, 30)
+	out, back := fit(img)
+	if out.Width != 200 || out.Height != minSide {
+		t.Fatalf("size = %dx%d, want 200x%d", out.Width, out.Height, minSide)
+	}
+	if p := back(Point{5, 15}); p != (Point{5, 15}) {
+		t.Fatalf("back = %v, want {5 15}", p)
+	}
+}
+
 func TestFitShrinksHugeImages(t *testing.T) {
 	img := solid(10001, 60, 0, 0, 0)
 	out, back := fit(img)

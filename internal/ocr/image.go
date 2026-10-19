@@ -43,7 +43,8 @@ func fit(img Image) (Image, func(Point) Point) {
 	}
 	padX := max(0, minSide-img.Width) / 2
 	padY := max(0, minSide-img.Height) / 2
-	if padX > 0 || padY > 0 {
+	// Not padX > 0: a side of 49 needs a pixel of padding but no offset.
+	if img.Width < minSide || img.Height < minSide {
 		img = pad(img, max(img.Width, minSide), max(img.Height, minSide), padX, padY)
 	}
 	s := float32(scale)
