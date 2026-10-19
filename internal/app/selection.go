@@ -50,8 +50,10 @@ func (a *App) selectionTranslate() {
 		return
 	case errors.Is(err, winclip.ErrBusy):
 		toast.Show("剪贴板正被其他程序占用，请稍后再试", anchor)
+		return
 	case errors.Is(err, context.DeadlineExceeded):
 		toast.Show("取词超时，请再试一次", anchor)
+		return
 	case err != nil:
 		toast.Show("取词失败："+err.Error(), anchor)
 		return
