@@ -85,7 +85,8 @@ func Default() Config {
 }
 
 // Load reads path on top of the defaults, so settings missing from the file
-// keep their default values. A missing file yields Default() and no error.
+// keep their default values. A missing file yields Default() and no error;
+// an undecryptable secret, the rest of the settings and ErrSecretUnreadable.
 func Load(path string) (Config, error) {
 	c := Default()
 	data, err := os.ReadFile(path)
@@ -98,8 +99,24 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Default(), fmt.Errorf("parse %s: %w", path, err)
 	}
-	return c, nil
+	err = nil
+	for _, s := range c.secrets() {
+		if s.sealed() {
+			*s = ""
+			err = ErrSecretUnreadable
+		}
+	}
+	return c, err
 }
+
+// ErrSecretUnreadable comes from Load, with the settings otherwise intact,
+// when a stored secret cannot be decrypted, as in a file from another
+// Windows account. The secret is empty; saving the settings would erase
+// it from the file too.
+var ErrSecretUnreadable = errors.New("a stored secret cannot be decrypted and must be entered again")
+
+// secrets lists every Secret field of c.
+func (c *Config) secrets() []*Secret { return []*Secret{&c.Translate.Baidu.Key} }
 
 // Save writes c to path atomically, creating the directory if needed.
 func Save(path string, c Config) error {

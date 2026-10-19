@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"log/slog"
@@ -181,6 +182,11 @@ func Run(opts Options) error {
 func (a *App) loadConfig() error {
 	cfg, err := config.Load(a.opts.ConfigPath)
 	a.cfg = cfg
+	if errors.Is(err, config.ErrSecretUnreadable) {
+		// Saving would replace the stored secret with nothing. Leave the
+		// file alone until the user enters the secret again.
+		return nil
+	}
 	if err != nil {
 		slog.Error("load config", "err", err)
 		return err

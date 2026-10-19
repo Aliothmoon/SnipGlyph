@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,10 +111,11 @@ func TestSecretUndecryptableBecomesEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := Load(path)
-	if err != nil {
-		t.Fatalf("an undecryptable secret must not fail the whole file: %v", err)
+	if !errors.Is(err, ErrSecretUnreadable) {
+		t.Fatalf("err = %v, want ErrSecretUnreadable", err)
 	}
-	if got.Translate.Baidu.Key != "" || got.Hotkeys.ScreenshotOCR != "F2" {
+	// One bad secret must not throw away the rest of the file.
+	if got.Translate.Baidu.Key != "" || got.Translate.Baidu.AppID != "a" || got.Hotkeys.ScreenshotOCR != "F2" {
 		t.Fatalf("got %+v", got)
 	}
 }
