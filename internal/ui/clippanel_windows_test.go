@@ -66,30 +66,41 @@ func TestClipPanel(t *testing.T) {
 		plain bool
 	}
 	var pasted []paste
-	closed := make(chan struct{}, 2)
-	open := func() *ClipPanel {
-		var p *ClipPanel
-		Do(func() {
-			var err error
-			p, err = NewClipPanel(ClipPanelOptions{
-				Store:     st,
-				Paste:     func(id int64, plain bool) { pasted = append(pasted, paste{id, plain}) },
-				Copy:      func(int64) {},
-				Recording: true,
-				OnClose:   func() { closed <- struct{}{} },
-			})
-			if err != nil {
-				t.Error(err) // not Fatal: this is the UI thread
-				return
-			}
-			p.holdOpen++ // the test process may not keep the focus
+	var p *ClipPanel
+	Do(func() {
+		var err error
+		p, err = NewClipPanel(ClipPanelOptions{
+			Store:     st,
+			Paste:     func(id int64, plain bool) { pasted = append(pasted, paste{id, plain}) },
+			Copy:      func(int64) {},
+			Recording: true,
 		})
-		if p == nil {
-			t.FailNow()
+		if err != nil {
+			t.Error(err) // not Fatal: this is the UI thread
+			return
 		}
-		return p
+		p.holdOpen++ // the test process may not keep the focus
+	})
+	if p == nil {
+		t.FailNow()
 	}
-	indexOf := func(p *ClipPanel, id int64) int {
+	t.Cleanup(func() { Do(p.Dispose) })
+	show := func() {
+		t.Helper()
+		Do(func() {
+			if err := p.Show(); err != nil {
+				t.Error(err)
+			}
+		})
+		waitFor(t, "the panel to appear", func() bool { return p.Visible() && !p.cloaked })
+	}
+	waitHidden := func() {
+		t.Helper()
+		waitFor(t, "the panel to hide", func() bool {
+			return !p.Visible() && !p.mw.IsDisposed() && !win.IsWindowVisible(p.mw.Handle())
+		})
+	}
+	indexOf := func(id int64) int {
 		for i, it := range p.list.items {
 			if it.ID == id {
 				return i
@@ -98,7 +109,7 @@ func TestClipPanel(t *testing.T) {
 		return -1
 	}
 
-	p := open()
+	show()
 	Do(func() {
 		if n := len(p.list.items); n != 4 {
 			t.Errorf("%d items listed", n)
@@ -136,18 +147,21 @@ func TestClipPanel(t *testing.T) {
 		}
 		key(p, win.VK_RETURN)
 	})
-	waitClosed(t, closed)
+	waitHidden()
 	if len(pasted) != 1 || pasted[0] != (paste{ids["rich"], false}) {
 		t.Errorf("pasted %+v", pasted)
 	}
 
-	p = open()
+	show()
 	Do(func() {
-		p.list.setSel(indexOf(p, ids["rich"]))
+		if p.search.Text() != "" || len(p.list.items) != 4 {
+			t.Errorf("shown again with search %q and %d items", p.search.Text(), len(p.list.items))
+		}
+		p.list.setSel(indexOf(ids["rich"]))
 		p.startEdit()
 		if p.editing != ids["rich"] || !win.IsWindowVisible(p.editor.Handle()) {
 			t.Errorf("editor not open (editing %d)", p.editing)
-			p.Close()
+			p.Hide()
 			return
 		}
 		if !strings.Contains(p.editor.Text(), "second line") {
@@ -174,5 +188,28 @@ func TestClipPanel(t *testing.T) {
 		}
 		key(p, win.VK_ESCAPE)
 	})
-	waitClosed(t, closed)
+	waitHidden()
+
+	// Hidden mid-edit, as the hotkey does: shown again with the list.
+	show()
+	Do(func() {
+		p.list.setSel(indexOf(ids["plain"]))
+		p.startEdit()
+		if p.editing == 0 {
+			t.Error("editor not open")
+		}
+		p.Hide()
+	})
+	waitHidden()
+	show()
+	Do(func() {
+		if p.editing != 0 || !win.IsWindowVisible(p.listCard.Handle()) || win.IsWindowVisible(p.editCard.Handle()) || !p.search.Enabled() {
+			t.Errorf("shown again still editing (editing %d)", p.editing)
+		}
+		if it, _ := st.Get(context.Background(), ids["plain"]); it.Text != "plain text 纯文本" {
+			t.Errorf("unsaved edit kept: %q", it.Text)
+		}
+		p.mw.Close() // Alt+F4
+	})
+	waitHidden()
 }

@@ -21,7 +21,7 @@ import (
 type clipboard struct {
 	clip      *cliphist.Store    // nil when the database could not be opened
 	clipStop  context.CancelFunc // stops the watcher; nil when not watching
-	clipPanel *ui.ClipPanel      // open panel, UI thread only
+	clipPanel *ui.ClipPanel      // made once, then shown and hidden; UI thread only
 	clipPrev  win.HWND           // the window in front before the panel opened
 
 	// clipPaused is set while 划词 sends its own Ctrl+C; clipIgnore is the
@@ -49,6 +49,9 @@ func (a *App) applyClipboard() string {
 	}
 	a.clip.SetLimit(a.cfg.Clipboard.Limit)
 	on := a.cfg.Clipboard.Enabled
+	if a.clipPanel != nil {
+		a.clipPanel.SetRecording(on)
+	}
 	switch {
 	case on && a.clipStop == nil:
 		ctx, stop := context.WithCancel(context.Background())
@@ -120,31 +123,45 @@ func (a *App) clipChanged() {
 // own doing, so the recorder leaves it alone.
 func (a *App) ownClipboardChange() { a.clipIgnore.Store(winclip.Sequence()) }
 
-// toggleClipPanel opens the clipboard panel, or closes it if open. UI
+// makeClipPanel makes the clipboard panel, hidden, unless it is made
+// already or there is no history. UI thread.
+func (a *App) makeClipPanel() error {
+	if a.clipPanel != nil || a.clip == nil {
+		return nil
+	}
+	p, err := ui.NewClipPanel(ui.ClipPanelOptions{
+		Store:     a.clip,
+		Paste:     a.pasteClip,
+		Copy:      func(id int64) { a.putClip(id, false, nil) },
+		Recording: a.cfg.Clipboard.Enabled,
+	})
+	if err != nil {
+		return err
+	}
+	a.clipPanel = p
+	return nil
+}
+
+// toggleClipPanel shows the clipboard panel, or hides it if shown. UI
 // thread.
 func (a *App) toggleClipPanel() {
-	if a.clipPanel != nil {
-		a.clipPanel.Close()
+	if a.clipPanel != nil && a.clipPanel.Visible() {
+		a.clipPanel.Hide()
 		return
 	}
 	if a.clip == nil {
 		a.tray.Warn("剪贴板历史", "剪贴板历史不可用，原因见日志")
 		return
 	}
-	a.clipPrev = win.GetForegroundWindow()
-	p, err := ui.NewClipPanel(ui.ClipPanelOptions{
-		Store:     a.clip,
-		Paste:     a.pasteClip,
-		Copy:      func(id int64) { a.putClip(id, false, nil) },
-		Recording: a.cfg.Clipboard.Enabled,
-		OnClose:   func() { a.clipPanel = nil },
-	})
+	err := a.makeClipPanel()
+	if err == nil {
+		a.clipPrev = win.GetForegroundWindow()
+		err = a.clipPanel.Show()
+	}
 	if err != nil {
 		slog.Error("open clipboard panel", "err", err)
 		a.tray.Warn("剪贴板历史", "无法打开面板："+err.Error())
-		return
 	}
-	a.clipPanel = p
 }
 
 // pasteClip pastes an item into the window that was in front of the panel.

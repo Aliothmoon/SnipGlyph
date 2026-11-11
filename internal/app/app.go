@@ -171,6 +171,12 @@ func Run(opts Options) error {
 			a.trigger(Action(id))
 		}
 	}()
+	// Made ahead, once the message loop runs, so the hotkey only shows it.
+	walkApp.Synchronize(func() {
+		if err := a.makeClipPanel(); err != nil {
+			slog.Error("make clipboard panel", "err", err)
+		}
+	})
 
 	slog.Info("ready")
 	walkApp.Run()

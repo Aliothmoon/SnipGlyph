@@ -229,10 +229,7 @@ func (l *clipList) layout() {
 		l.dpi = dpi
 		l.lineH = fontLineHeight(listFont(), dpi)
 		l.metaH = fontLineHeight(metaFont(), dpi)
-		for id, b := range l.thumbs {
-			b.Dispose()
-			delete(l.thumbs, id)
-		}
+		l.dropThumbs()
 	}
 	l.rowTop = l.rowTop[:0]
 	y := l.px(rowGap)
@@ -432,13 +429,14 @@ func (l *clipList) thumbBitmap(it cliphist.Summary, w, h int) *walk.Bitmap {
 	return bmp
 }
 
-func (l *clipList) dispose() {
-	for _, b := range l.thumbs {
+// dropThumbs frees the scaled thumbnails; paint makes them again.
+func (l *clipList) dropThumbs() {
+	for id, b := range l.thumbs {
 		if b != nil {
 			b.Dispose()
 		}
+		delete(l.thumbs, id)
 	}
-	l.thumbs = nil
 }
 
 // fontLineHeight is the height of a line of text in f.

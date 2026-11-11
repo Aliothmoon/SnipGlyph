@@ -22,6 +22,7 @@ const (
 	clipPanelH     = 640
 	clipListLimit  = cliphist.DefaultLimit + 500 // a whole tab, pinned items included
 	clipSearchWait = 120 * time.Millisecond
+	clipRevealWait = 100 * time.Millisecond // longest wait for walk's layout
 	clipHint       = "Enter 粘贴 · Shift+Enter 纯文本 · Ctrl+P 置顶 · F2 编辑 · Del 删除 · 右键更多"
 	clipEditHint   = "Ctrl+S 保存 · Esc 取消（保存后去掉原有格式）"
 	fillStretch    = 1000 // against the default 1 of every other item
@@ -33,17 +34,18 @@ type ClipPanelOptions struct {
 	// Paste puts an item on the clipboard and pastes it into the window
 	// that was in front before the panel; plain leaves out formatting.
 	// Copy only puts it on the clipboard. Both are called once the panel
-	// has closed, on the UI thread.
+	// has hidden, on the UI thread.
 	Paste func(id int64, plain bool)
 	Copy  func(id int64)
-	// Recording says whether new copies are being saved.
+	// Recording says whether new copies are being saved; SetRecording
+	// changes it.
 	Recording bool
-	// OnClose runs on the UI thread when the panel closes.
-	OnClose func()
 }
 
 // ClipPanel is the clipboard history panel: a search box, tabs and the
-// list. It closes when it loses focus. Its methods run on the UI thread.
+// list. It is made once and then shown and hidden, because making it takes
+// longer than a hotkey should. It hides when it loses focus. Its methods
+// run on the UI thread.
 type ClipPanel struct {
 	opts ClipPanelOptions
 	mw   *walk.MainWindow
@@ -68,7 +70,8 @@ type ClipPanel struct {
 	onPrompt func(name string) error // what Enter in the prompt does
 	menuTab  int                     // tab the tab menu was opened on
 	holdOpen int                     // > 0 while a message box is up
-	closing  bool
+	shown    bool                    // between Show and Hide
+	cloaked  bool                    // shown but not revealed yet
 	timer    *time.Timer
 }
 
@@ -76,7 +79,7 @@ func storeCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
-// NewClipPanel opens the panel centred on the monitor under the mouse.
+// NewClipPanel makes the panel, hidden; Show opens it.
 func NewClipPanel(opts ClipPanelOptions) (*ClipPanel, error) {
 	mw, err := newWindow("SnipGlyph · 剪贴板", &walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
 	if err != nil {
@@ -98,50 +101,122 @@ func NewClipPanel(opts ClipPanelOptions) (*ClipPanel, error) {
 		walk.App().Synchronize(func() {
 			// It may have been activated again in the meantime.
 			if !p.gone() && p.holdOpen == 0 && p.editing == 0 && win.GetForegroundWindow() != h {
-				mw.Close()
+				p.Hide()
 			}
 		})
 	})
-	mw.Closing().Attach(func(*bool, walk.CloseReason) {
-		p.closing = true
+	mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
+		*canceled = true // Alt+F4 hides it, as Esc does
+		p.Hide()
+	})
+	mw.Disposing().Attach(func() {
+		p.shown = false
 		if p.timer != nil {
 			p.timer.Stop()
 		}
 		walk.App().DeletePreTranslateHandlerForHWND(h)
-		p.list.dispose()
-		if opts.OnClose != nil {
-			opts.OnClose()
-		}
+		p.list.dropThumbs()
 	})
 	ex := win.GetWindowLong(h, win.GWL_EXSTYLE)
 	win.SetWindowLong(h, win.GWL_EXSTYLE, ex|win.WS_EX_TOOLWINDOW)
 	frameless(mw)
-	work, dpi := cursorMonitor()
-	if err := mw.SetBoundsPixels(centerIn(work, clipPanelW*dpi/96, clipPanelH*dpi/96)); err != nil {
+	if err := p.place(); err != nil {
 		return nil, err
 	}
 	win.SetWindowPos(h, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE|win.SWP_NOSIZE)
+	// walk sets a form up on its first Show. From here on the panel is
+	// cloaked whenever it is off the screen.
 	cloak(h, true)
 	mw.Show()
-	if err := p.loadTabs(cliphist.DefaultTab); err != nil {
-		return nil, err
-	}
-	p.reload(0)
-	cloak(h, false)
-	win.SetForegroundWindow(h)
-	p.search.SetFocus()
+	mw.SetVisible(false)
 	ok = true
 	return p, nil
 }
 
-func (p *ClipPanel) gone() bool { return p.closing || p.mw.IsDisposed() }
-
-// Close closes the panel.
-func (p *ClipPanel) Close() {
-	if !p.gone() {
-		p.mw.Close()
-	}
+// place centres the panel on the monitor under the mouse. Moving it there
+// while hidden gives it that monitor's DPI before it is laid out.
+func (p *ClipPanel) place() error {
+	work, dpi := cursorMonitor()
+	return p.mw.SetBoundsPixels(centerIn(work, clipPanelW*dpi/96, clipPanelH*dpi/96))
 }
+
+func (p *ClipPanel) gone() bool { return !p.shown || p.mw.IsDisposed() }
+
+// Visible reports whether the panel is open.
+func (p *ClipPanel) Visible() bool { return !p.gone() }
+
+// Show opens the panel on the monitor under the mouse, on the first tab
+// with an empty search. It appears once laid out and drawn.
+func (p *ClipPanel) Show() error {
+	if p.mw.IsDisposed() {
+		return errors.New("the clipboard panel is gone")
+	}
+	if p.shown {
+		return nil
+	}
+	if err := p.place(); err != nil {
+		return err
+	}
+	if err := p.loadTabs(cliphist.DefaultTab); err != nil {
+		return err
+	}
+	p.mw.SetVisible(true) // still cloaked
+	p.shown, p.cloaked = true, true
+	p.reload(0)
+	// walk lays the window out on another goroutine and applies the result
+	// later. A newer layout request drops the callback, so a timer stands
+	// in for it.
+	p.mw.RequestImmediateLayoutWithCompletionFunc(p.reveal)
+	time.AfterFunc(clipRevealWait, func() { walk.App().Synchronize(p.reveal) })
+	return nil
+}
+
+// reveal draws the panel, uncloaks it and gives it the focus.
+func (p *ClipPanel) reveal() {
+	if p.gone() || !p.cloaked {
+		return
+	}
+	p.cloaked = false
+	h := p.mw.Handle()
+	win.RedrawWindow(h, nil, 0, win.RDW_UPDATENOW|win.RDW_ALLCHILDREN)
+	cloak(h, false)
+	win.SetForegroundWindow(h)
+	p.search.SetFocus()
+}
+
+// Hide puts the panel away until the next Show. An unsaved edit is lost.
+func (p *ClipPanel) Hide() {
+	if p.gone() {
+		return
+	}
+	// Back to the plain list while still shown: walk does not lay out a
+	// hidden window, and Show expects the layout to be current.
+	if p.editing != 0 {
+		p.editing = 0
+		setShown(p.editCard, false)
+		setShown(p.listCard, true)
+		p.search.SetEnabled(true)
+	}
+	if p.onPrompt != nil {
+		p.onPrompt = nil
+		setShown(p.prompt, false)
+	}
+	p.resetHint()
+	p.search.SetText("")
+	p.shown, p.cloaked = false, false
+	if p.timer != nil { // started by the SetText
+		p.timer.Stop()
+	}
+	cloak(p.mw.Handle(), true)
+	p.mw.SetVisible(false)
+	p.list.dropThumbs()
+}
+
+// SetRecording says whether new copies are being saved.
+func (p *ClipPanel) SetRecording(on bool) { p.opts.Recording = on }
+
+// Dispose destroys the panel.
+func (p *ClipPanel) Dispose() { p.mw.Dispose() }
 
 // Refresh reloads the list, after a new copy was recorded.
 func (p *ClipPanel) Refresh() {
@@ -176,7 +251,7 @@ func (p *ClipPanel) build() error {
 	if _, err := walk.NewHSpacer(bar); err != nil {
 		return err
 	}
-	if _, err := newIconButton(bar, glyphClose, "关闭（Esc）", true, p.Close); err != nil {
+	if _, err := newIconButton(bar, glyphClose, "关闭（Esc）", true, p.Hide); err != nil {
 		return err
 	}
 	dragBy(mw, bar)
@@ -365,7 +440,7 @@ func (p *ClipPanel) paste(plain bool) {
 	if !ok {
 		return
 	}
-	p.Close()
+	p.Hide()
 	p.opts.Paste(it.ID, plain)
 }
 
@@ -374,7 +449,7 @@ func (p *ClipPanel) copyItem() {
 	if !ok {
 		return
 	}
-	p.Close()
+	p.Hide()
 	p.opts.Copy(it.ID)
 }
 
@@ -706,7 +781,7 @@ func (k clipKeys) OnPreTranslate(msg *win.MSG) bool {
 		if p.search.Text() != "" {
 			p.search.SetText("")
 		} else {
-			walk.App().Synchronize(p.Close)
+			walk.App().Synchronize(p.Hide)
 		}
 	case key == win.VK_DELETE && (shift || (mods == 0 && p.search.Text() == "")):
 		p.deleteItem()
