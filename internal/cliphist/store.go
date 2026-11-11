@@ -58,6 +58,9 @@ type Store struct {
 	limit int
 }
 
+// The big values go last in items: SQLite reaches a column only by walking
+// the overflow pages of every large value stored before it, so a PNG ahead
+// of width or used made listing read the whole database.
 const schema = `
 CREATE TABLE tabs (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,18 +72,18 @@ CREATE TABLE items (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
 	tab     INTEGER NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
 	kind    TEXT NOT NULL,
-	text    TEXT NOT NULL DEFAULT '',
-	html    BLOB,
-	rtf     BLOB,
-	png     BLOB,
-	thumb   BLOB,
 	width   INTEGER NOT NULL DEFAULT 0,
 	height  INTEGER NOT NULL DEFAULT 0,
 	source  TEXT NOT NULL DEFAULT '',
 	hash    BLOB NOT NULL,
 	pinned  INTEGER NOT NULL DEFAULT 0,
 	created INTEGER NOT NULL, -- Unix milliseconds
-	used    INTEGER NOT NULL  -- last copied: the list order
+	used    INTEGER NOT NULL, -- last copied: the list order
+	text    TEXT NOT NULL DEFAULT '',
+	html    BLOB,
+	rtf     BLOB,
+	thumb   BLOB,
+	png     BLOB
 );
 CREATE INDEX items_order ON items(tab, pinned DESC, used DESC);
 CREATE INDEX items_hash ON items(tab, hash);
@@ -214,8 +217,9 @@ func insert(ctx context.Context, tx *sql.Tx, tab int64, it Item) (int64, error) 
 // recently copied, keeping those whose text contains every term of query.
 func (s *Store) List(ctx context.Context, tab int64, query string, limit int) ([]Summary, error) {
 	where, args := searchFilter(query)
+	// typeof, unlike IS NULL, answers without loading the value.
 	q := `SELECT id, kind, substr(text, 1, 400), width, height, source, pinned,
-		html IS NOT NULL OR rtf IS NOT NULL, used, thumb IS NOT NULL,
+		typeof(html) <> 'null' OR typeof(rtf) <> 'null', used, typeof(thumb) <> 'null',
 		CASE kind WHEN 'files' THEN length(text) - length(replace(text, char(10), '')) + 1 ELSE 0 END
 		FROM items WHERE tab = ?`
 	if where != "" {
