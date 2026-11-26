@@ -14,10 +14,20 @@ import (
 const FileName = "config.json"
 
 type Config struct {
+	// Language sets the UI language: "auto" (follow Windows), "zh-CN", or "en".
+	Language  string    `json:"language"`
+	OCR       OCR       `json:"ocr"`
 	Hotkeys   Hotkeys   `json:"hotkeys"`
 	Translate Translate `json:"translate"`
 	History   History   `json:"history"`
 	Clipboard Clipboard `json:"clipboard"`
+}
+
+type OCR struct {
+	// Dir overrides where OneOCR files (oneocr.dll, onnxruntime.dll,
+	// oneocr.onemodel) are loaded from. Relative paths resolve against
+	// the executable's directory.
+	Dir string `json:"dir"`
 }
 
 type Clipboard struct {
@@ -68,6 +78,7 @@ type Hotkeys struct {
 
 func Default() Config {
 	return Config{
+		Language: "auto",
 		Hotkeys: Hotkeys{
 			ScreenshotOCR:       "Win+Alt+Shift+C",
 			SilentOCR:           "Win+Alt+C",

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"SnipGlyph/internal/cliphist"
+	"SnipGlyph/internal/i18n"
 )
 
 // List metrics, in DIPs.
@@ -23,7 +24,7 @@ const (
 	rowPadY   = 7
 	rowGap    = 2
 	rowInset  = 4  // selection highlight inset from the edges
-	metaW     = 72 // time and pin column on the right
+	metaW     = 86 // time and pin column on the right
 	thumbMaxW = 160
 	thumbMaxH = 64
 )
@@ -389,13 +390,13 @@ func (l *clipList) paintRow(c *walk.Canvas, i int, r walk.Rectangle) error {
 		label.X += w + l.px(12)
 		label.Width -= w + l.px(12)
 		label.Height = h
-		c.DrawTextPixels(fmt.Sprintf("图片 %d×%d", it.Width, it.Height), uiFont(), colorMuted, label,
+		c.DrawTextPixels(fmt.Sprintf(i18n.Current().ClipImageMeta, it.Width, it.Height), uiFont(), colorMuted, label,
 			walk.TextLeft|walk.TextVCenter|walk.TextSingleLine)
 	case cliphist.Files:
 		paths := strings.Split(it.Preview, "\n")
 		first := filepath.Base(paths[0])
 		if it.Count > 1 {
-			first = fmt.Sprintf("%s 等 %d 项", first, it.Count)
+			first = fmt.Sprintf(i18n.Current().ClipFilesMore, first, it.Count)
 		}
 		if f := iconFont(); f != nil {
 			ir := content
@@ -453,18 +454,19 @@ func fontLineHeight(f *walk.Font, dpi int) int {
 
 // ago says when something was copied, briefly.
 func ago(t, now time.Time) string {
+	tr := i18n.Current()
 	d := now.Sub(t)
 	y1, m1, d1 := t.Date()
 	y2, m2, d2 := now.Date()
 	switch {
 	case d < time.Minute:
-		return "刚刚"
+		return tr.AgoJustNow
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前", int(d/time.Minute))
+		return fmt.Sprintf(tr.AgoMinutes, int(d/time.Minute))
 	case y1 == y2 && m1 == m2 && d1 == d2:
 		return t.Format("15:04")
 	case now.AddDate(0, 0, -1).Format("20060102") == t.Format("20060102"):
-		return "昨天 " + t.Format("15:04")
+		return fmt.Sprintf(tr.AgoYesterday, t.Format("15:04"))
 	case y1 == y2:
 		return t.Format("01-02")
 	}

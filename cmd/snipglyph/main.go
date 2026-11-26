@@ -19,6 +19,7 @@ import (
 	"SnipGlyph/internal/cliphist"
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/instance"
 	"SnipGlyph/internal/logging"
 	"SnipGlyph/internal/ocr"
@@ -29,79 +30,109 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 // workerFlag makes the binary act as the OCR worker process. The worker
 // is the same executable so that OneOCR, its ~150 MB and any crash in it stay
 // out of the tray process.
-const workerFlag = "--ocr-worker"
+const (
+	workerFlag   = "--ocr-worker"
+	portableFlag = "--portable"
+)
 
 func main() {
-	if len(os.Args) == 3 && os.Args[1] == workerFlag {
-		os.Exit(runWorker(os.Args[2]))
+	if len(os.Args) >= 3 && os.Args[1] == workerFlag {
+		var customDir string
+		if len(os.Args) >= 4 {
+			customDir = os.Args[3]
+		}
+		os.Exit(runWorker(os.Args[2], customDir))
 	}
-	os.Exit(run())
+	portable := false
+	for _, arg := range os.Args[1:] {
+		if arg == portableFlag || arg == "-portable" {
+			portable = true
+		}
+	}
+	os.Exit(run(portable))
 }
 
 // runWorker serves OCR over stdin/stdout; logs go to stderr, which the
 // parent forwards into its own log.
-func runWorker(cacheDir string) int {
+func runWorker(cacheDir, customDir string) int {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	if err := ocr.ServeWorker(os.Stdin, os.Stdout, cacheDir); err != nil {
+	if err := ocr.ServeWorkerWith(os.Stdin, os.Stdout, ocr.WorkerOptions{
+		CacheDir:  cacheDir,
+		CustomDir: customDir,
+	}); err != nil {
 		slog.Error("ocr worker", "err", err)
 		return 1
 	}
 	return 0
 }
 
-func run() int {
+func run(forcePortable bool) int {
+	i18n.Set(i18n.Auto)
+	tr := i18n.Current()
+
 	release, err := instance.Acquire("SnipGlyph")
 	if errors.Is(err, instance.ErrRunning) {
-		messageBox("SnipGlyph 已经在运行了，可以在任务栏托盘里找到它。", windows.MB_ICONINFORMATION)
+		messageBox(tr.AlreadyRunning, windows.MB_ICONINFORMATION)
 		return 0
 	}
 	if err != nil {
-		return fatal("单实例检查失败", err)
+		return fatal(tr.FatalSingleInstance, err)
 	}
 	defer release()
 
-	local, err := appdir.Local()
+	exe, err := os.Executable()
 	if err != nil {
-		return fatal("无法创建数据目录", err)
+		return fatal(tr.FatalExePath, err)
 	}
-	roaming, err := appdir.Roaming()
+	portable := appdir.IsPortable(exe, forcePortable)
+	paths, err := appdir.Resolve(exe, portable)
 	if err != nil {
-		return fatal("无法创建配置目录", err)
+		return fatal(tr.FatalDataDir, err)
 	}
-	logDir := filepath.Join(local, "logs")
-	logFile, err := logging.Open(logDir, "snipglyph.log")
+	logFile, err := logging.Open(paths.LogDir, "snipglyph.log")
 	if err != nil {
-		return fatal("无法打开日志文件", err)
+		return fatal(tr.FatalLogFile, err)
 	}
 	defer logFile.Close()
 	// A GUI-subsystem binary has no visible stderr; send runtime crashes to the log.
 	_ = debug.SetCrashOutput(logFile, debug.CrashOptions{})
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
-	slog.Info("starting", "version", version, "pid", os.Getpid())
+	slog.Info("starting", "version", version, "pid", os.Getpid(),
+		"portable", paths.Portable, "config_dir", paths.ConfigDir, "data_dir", paths.DataDir)
 
-	exe, err := os.Executable()
-	if err != nil {
-		return fatal("无法确定程序路径", err)
+	var autostartArgs []string
+	if forcePortable {
+		autostartArgs = []string{portableFlag}
 	}
-	ocrCache := filepath.Join(local, "oneocr")
 	err = app.Run(app.Options{
-		ConfigPath:    filepath.Join(roaming, config.FileName),
-		ConfigDir:     roaming,
-		LogDir:        logDir,
-		HistoryPath:   filepath.Join(local, history.FileName),
-		ClipboardPath: filepath.Join(local, cliphist.FileName),
+		Portable:      paths.Portable,
+		ConfigPath:    filepath.Join(paths.ConfigDir, config.FileName),
+		ConfigDir:     paths.ConfigDir,
+		LogDir:        paths.LogDir,
+		HistoryPath:   filepath.Join(paths.DataDir, history.FileName),
+		ClipboardPath: filepath.Join(paths.DataDir, cliphist.FileName),
 		Exe:           exe,
-		OCRWorker:     func() *exec.Cmd { return exec.Command(exe, workerFlag, ocrCache) },
+		AutostartArgs: autostartArgs,
+		OCRWorker: func(customDir string) *exec.Cmd {
+			if customDir != "" {
+				return exec.Command(exe, workerFlag, paths.OCRCacheDir, customDir)
+			}
+			return exec.Command(exe, workerFlag, paths.OCRCacheDir)
+		},
 	})
 	if err != nil {
-		return fatal("启动失败", err)
+		return fatal(i18n.Current().FatalStart, err)
 	}
 	return 0
 }
 
 func fatal(what string, err error) int {
 	slog.Error(what, "err", err)
-	messageBox(fmt.Sprintf("%s：%v", what, err), windows.MB_ICONERROR)
+	sep := ": "
+	if i18n.Active() == i18n.ZhCN {
+		sep = "："
+	}
+	messageBox(fmt.Sprintf("%s%s%v", what, sep, err), windows.MB_ICONERROR)
 	return 1
 }
 

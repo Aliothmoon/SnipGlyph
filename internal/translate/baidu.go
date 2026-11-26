@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"SnipGlyph/internal/i18n"
 )
 
 const baiduEndpoint = "https://fanyi-api.baidu.com/api/trans/vip/translate"
@@ -29,7 +31,7 @@ type Baidu struct {
 	Endpoint string
 }
 
-func (b *Baidu) Name() string { return "百度翻译" }
+func (b *Baidu) Name() string { return i18n.Current().BaiduName }
 
 var baiduCodes = map[Lang]string{
 	Auto:               "auto",
@@ -48,7 +50,7 @@ func baiduCode(l Lang) (string, error) {
 	if c, ok := baiduCodes[l]; ok {
 		return c, nil
 	}
-	return "", fmt.Errorf("百度翻译不支持语言 %s", l)
+	return "", fmt.Errorf(i18n.Current().BaiduUnsupportedLang, l)
 }
 
 func fromBaiduCode(c string) Lang {
@@ -60,28 +62,15 @@ func fromBaiduCode(c string) Lang {
 	return Lang(c)
 }
 
-// baiduErrors explains the error codes users actually run into.
-var baiduErrors = map[string]string{
-	"52001": "请求超时，请重试",
-	"52002": "百度翻译系统错误，请重试",
-	"52003": "APP ID 无效，或未开通通用翻译服务",
-	"54000": "缺少必填参数",
-	"54001": "签名错误，请检查密钥",
-	"54003": "访问频率受限（标准版每秒 1 次）",
-	"54004": "账户余额不足",
-	"54005": "长文本请求过于频繁，请稍后再试",
-	"58000": "客户端 IP 不在百度后台的 IP 白名单中",
-	"58001": "不支持该语言方向",
-	"58002": "服务已关闭，请到百度翻译开放平台开启",
-	"90107": "认证未通过或未生效",
-}
+
 
 func (b *Baidu) Translate(ctx context.Context, req Request, partial func(string)) (Result, error) {
+	tr := i18n.Current()
 	if b.AppID == "" || b.Key == "" {
-		return Result{}, errors.New("百度翻译未配置 APP ID 或密钥")
+		return Result{}, errors.New(tr.BaiduNotConfigured)
 	}
 	if len(req.Text) > baiduMaxBytes {
-		return Result{}, fmt.Errorf("文本过长：百度翻译单次最多 %d 字节，当前 %d 字节", baiduMaxBytes, len(req.Text))
+		return Result{}, fmt.Errorf(tr.BaiduTextTooLong, baiduMaxBytes, len(req.Text))
 	}
 	from, err := baiduCode(req.From)
 	if err != nil {
@@ -116,15 +105,15 @@ func (b *Baidu) Translate(ctx context.Context, req Request, partial func(string)
 	}
 	resp, err := client.Do(hreq)
 	if err != nil {
-		return Result{}, fmt.Errorf("百度翻译请求失败：%w", err)
+		return Result{}, fmt.Errorf(tr.BaiduRequestFailed, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return Result{}, fmt.Errorf("百度翻译响应读取失败：%w", err)
+		return Result{}, fmt.Errorf(tr.BaiduReadFailed, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("百度翻译返回 HTTP %d", resp.StatusCode)
+		return Result{}, fmt.Errorf(tr.BaiduHTTPStatus, resp.StatusCode)
 	}
 
 	var r struct {
@@ -134,14 +123,14 @@ func (b *Baidu) Translate(ctx context.Context, req Request, partial func(string)
 		ErrorMsg  string                 `json:"error_msg"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return Result{}, fmt.Errorf("百度翻译响应无法解析：%w", err)
+		return Result{}, fmt.Errorf(tr.BaiduParseFailed, err)
 	}
 	if code := fmt.Sprint(r.ErrorCode); r.ErrorCode != nil && code != "52000" {
-		msg := baiduErrors[code]
+		msg := tr.BaiduErrors[code]
 		if msg == "" {
 			msg = r.ErrorMsg
 		}
-		return Result{}, fmt.Errorf("百度翻译错误 %s：%s", code, msg)
+		return Result{}, fmt.Errorf(tr.BaiduAPIError, code, msg)
 	}
 	// Baidu translates each input line separately.
 	lines := make([]string, len(r.Results))

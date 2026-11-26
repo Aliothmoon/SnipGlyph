@@ -9,6 +9,7 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/hotkey"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/netx"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/translate"
@@ -39,7 +40,8 @@ func (a *App) openSettings() {
 	})
 	if err != nil {
 		slog.Error("open settings", "err", err)
-		a.tray.Warn("设置", "无法打开设置窗口："+err.Error())
+		tr := i18n.Current()
+		a.tray.Warn(tr.TraySettings, fmt.Sprintf(tr.OpenSettingsFailed, err.Error()))
 		return
 	}
 	a.settingsWin = w
@@ -48,26 +50,38 @@ func (a *App) openSettings() {
 // saveSettings checks, stores and applies settings from the settings
 // window. UI thread.
 func (a *App) saveSettings(cfg config.Config, autostartOn bool) ([]string, error) {
+	tr := i18n.Current()
 	if err := checkHotkeys(cfg.Hotkeys); err != nil {
 		return nil, err
 	}
 	if _, err := netx.Client(cfg.Translate.Baidu.Proxy); err != nil {
-		return nil, fmt.Errorf("百度翻译的代理地址有误：%w", err)
+		return nil, fmt.Errorf(tr.BaiduProxyBad, err.Error())
 	}
 	if err := config.Save(a.opts.ConfigPath, cfg); err != nil {
-		return nil, fmt.Errorf("写入配置文件失败：%w", err)
+		return nil, fmt.Errorf(tr.SaveConfigFailed, err.Error())
 	}
 	slog.Info("settings saved")
+
+	prevLang := i18n.Active()
+	prevOCRDir := a.cfg.OCR.Dir
 	a.cfg = cfg
+	i18n.Set(i18n.Parse(cfg.Language))
+	a.ocrDir.Store(cfg.OCR.Dir)
+	if cfg.OCR.Dir != prevOCRDir {
+		a.ocr.Close()
+	}
+
 	problems := append(a.registerHotkeys(), a.buildEngines()...)
 	if err := a.tray.SetMenu(a.menu()); err != nil {
 		slog.Error("rebuild tray menu", "err", err)
 	}
 	if err := a.setAutostart(autostartOn); err != nil {
 		slog.Warn("set autostart", "on", autostartOn, "err", err)
-		problems = append(problems, "开机自启设置失败："+err.Error())
+		problems = append(problems, fmt.Sprintf(i18n.Current().AutostartFailed, err.Error()))
 	}
-	if a.histWin != nil {
+	if i18n.Active() != prevLang {
+		a.applyLanguageChange()
+	} else if a.histWin != nil {
 		a.histWin.SetRecording(cfg.History.Enabled)
 	}
 	if p := a.applyClipboard(); p != "" {
@@ -78,6 +92,7 @@ func (a *App) saveSettings(cfg config.Config, autostartOn bool) ([]string, error
 
 // checkHotkeys rejects malformed hotkeys and one hotkey used twice.
 func checkHotkeys(h config.Hotkeys) error {
+	tr := i18n.Current()
 	seen := map[hotkey.Hotkey]Action{}
 	for _, act := range allActions {
 		s := act.hotkey(h)
@@ -86,10 +101,10 @@ func checkHotkeys(h config.Hotkeys) error {
 		}
 		hk, err := hotkey.Parse(s)
 		if err != nil {
-			return fmt.Errorf("「%s」的快捷键 %s 格式错误", act, s)
+			return fmt.Errorf(tr.HotkeyFormatErr, act, s)
 		}
 		if other, dup := seen[hk]; dup {
-			return fmt.Errorf("「%s」和「%s」用了同一个快捷键 %s", other, act, hk)
+			return fmt.Errorf(tr.HotkeyDupErr, other, act, hk)
 		}
 		seen[hk] = act
 	}
@@ -121,9 +136,9 @@ func (a *App) setAutostart(on bool) error {
 		return err
 	}
 	switch {
-	case on && (!enabled || !autostart.Points(cmd, a.opts.Exe)):
-		slog.Info("autostart enabled", "exe", a.opts.Exe)
-		return autostart.Enable(runName, a.opts.Exe)
+	case on && (!enabled || !autostart.Points(cmd, a.opts.Exe, a.opts.AutostartArgs...)):
+		slog.Info("autostart enabled", "exe", a.opts.Exe, "args", a.opts.AutostartArgs)
+		return autostart.Enable(runName, a.opts.Exe, a.opts.AutostartArgs...)
 	case !on && cmd != "":
 		slog.Info("autostart disabled")
 		return autostart.Disable(runName)
@@ -150,9 +165,10 @@ func (a *App) openHistoryWindow() {
 		a.histWin.Activate()
 		return
 	}
+	tr := i18n.Current()
 	st := a.hist
 	if st == nil {
-		a.tray.Warn("历史记录", "历史记录不可用，原因见日志")
+		a.tray.Warn(tr.TrayHistory, tr.HistoryUnavailableLog)
 		return
 	}
 	w, err := ui.NewHistoryWindow(ui.HistoryOptions{
@@ -172,7 +188,7 @@ func (a *App) openHistoryWindow() {
 	})
 	if err != nil {
 		slog.Error("open history window", "err", err)
-		a.tray.Warn("历史记录", "无法打开历史记录窗口："+err.Error())
+		a.tray.Warn(tr.TrayHistory, fmt.Sprintf(tr.OpenHistoryFailed, err.Error()))
 		return
 	}
 	a.histWin = w
@@ -181,7 +197,7 @@ func (a *App) openHistoryWindow() {
 // openEntry reopens a saved result in a popup. Edits and new translations
 // there update the same entry. UI thread.
 func (a *App) openEntry(e history.Entry) {
-	s, err := a.newSession("SnipGlyph · 历史记录", cursorAnchor(), e.Kind)
+	s, err := a.newSession("SnipGlyph · "+i18n.Current().TrayHistory, cursorAnchor(), e.Kind)
 	if err != nil {
 		slog.Error("open popup", "err", err)
 		return

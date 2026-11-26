@@ -12,6 +12,7 @@ import (
 
 	"SnipGlyph/internal/capture"
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
@@ -34,12 +35,13 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	a.ocr.Warm()
 	ctx := walk.App().Context()
 	shot, err := capture.Select(ctx)
+	tr := i18n.Current()
 	switch {
 	case errors.Is(err, capture.ErrCanceled), errors.Is(err, capture.ErrBusy), errors.Is(err, context.Canceled):
 		return
 	case err != nil:
 		slog.Error("capture", "err", err)
-		a.tray.Warn(act.String(), "截图失败："+err.Error())
+		a.tray.Warn(act.String(), fmt.Sprintf(tr.CaptureFailed, err.Error()))
 		return
 	}
 	b := shot.Bounds
@@ -56,12 +58,12 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 		ui.Do(func() {
 			s, err = a.newSession("SnipGlyph · "+act.String(), anchor, kind)
 			if err == nil {
-				s.popup.SetSourceBusy("正在识别…")
+				s.popup.SetSourceBusy(i18n.Current().OCRRecognizing)
 			}
 		})
 		if err != nil {
 			slog.Error("open popup", "err", err)
-			a.tray.Warn(act.String(), "无法打开结果窗口："+err.Error())
+			a.tray.Warn(act.String(), fmt.Sprintf(i18n.Current().OpenPopupFailed, err.Error()))
 			return
 		}
 	}
@@ -72,35 +74,37 @@ func (a *App) screenshotOCR(act Action, silent bool) {
 	cancel()
 	slog.Info("ocr done", "size", fmt.Sprintf("%dx%d", b.Dx(), b.Dy()), "lines", len(res.Lines), "took", time.Since(began).Round(time.Millisecond), "err", err)
 	text := res.Text()
+	tr = i18n.Current()
 
 	if silent {
 		// A toast on the selection's screen, not a system notification:
 		// lighter, and it does not pile up in the notification centre.
 		switch {
 		case err != nil:
-			toast.Show("识别失败："+err.Error(), anchor)
+			toast.Show(fmt.Sprintf(tr.OCRFailed, formatOCRError(err)), anchor)
 		case text == "":
-			toast.Show("没有识别到文字", anchor)
+			toast.Show(tr.OCRNoText, anchor)
 		default:
 			wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			err = winclip.SetText(wctx, text, winclip.WriteOptions{})
 			cancel()
 			if err != nil {
-				toast.Show("复制到剪贴板失败："+err.Error(), anchor)
+				toast.Show(fmt.Sprintf(tr.CopyToClipFailed, err.Error()), anchor)
 				return
 			}
 			ui.Do(func() { a.remember(&record{kind: kind}, text, "", "") })
-			toast.Show(fmt.Sprintf("已复制 %d 行文字", len(res.Lines)), anchor)
+			toast.Show(tr.CopiedLines(len(res.Lines)), anchor)
 		}
 		return
 	}
 
 	ui.Do(func() {
+		cur := i18n.Current()
 		switch {
 		case err != nil:
-			s.popup.SetSourceError("识别失败：" + err.Error())
+			s.popup.SetSourceError(fmt.Sprintf(cur.OCRFailed, formatOCRError(err)))
 		case text == "":
-			s.popup.SetSourceError("没有识别到文字")
+			s.popup.SetSourceError(cur.OCRNoText)
 		default:
 			s.popup.SetSource(text)
 			a.remember(s.rec, text, "", "")

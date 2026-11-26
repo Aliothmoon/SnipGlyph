@@ -8,6 +8,8 @@ import (
 	"github.com/tailscale/walk"
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
+
+	"SnipGlyph/internal/i18n"
 )
 
 // Windows 11 light palette.
@@ -20,17 +22,35 @@ var (
 	colorError  = walk.RGB(196, 43, 28)
 )
 
-const uiFace = "Microsoft YaHei UI"
+type fontKey struct {
+	face   string
+	points int
+	style  walk.FontStyle
+}
+
+var (
+	fontMu    sync.Mutex
+	fontCache = map[fontKey]*walk.Font{}
+)
 
 func newFont(points int, style walk.FontStyle) func() *walk.Font {
-	return sync.OnceValue(func() *walk.Font {
-		f, err := walk.NewFont(uiFace, points, style)
+	return func() *walk.Font {
+		face := i18n.Current().FontFace
+		key := fontKey{face: face, points: points, style: style}
+		fontMu.Lock()
+		defer fontMu.Unlock()
+		if f, ok := fontCache[key]; ok {
+			return f
+		}
+		f, err := walk.NewFont(face, points, style)
 		if err != nil {
-			slog.Warn("font unavailable, using the default", "face", uiFace, "err", err)
+			slog.Warn("font unavailable, using the default", "face", face, "err", err)
+			fontCache[key] = nil
 			return nil
 		}
+		fontCache[key] = f
 		return f
-	})
+	}
 }
 
 var (

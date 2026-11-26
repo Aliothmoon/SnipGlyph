@@ -15,16 +15,15 @@ import (
 	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/cliphist"
+	"SnipGlyph/internal/i18n"
 )
 
 const (
-	clipPanelW     = 560 // DIP
+	clipPanelW     = 600 // DIP
 	clipPanelH     = 640
 	clipListLimit  = cliphist.DefaultLimit + 500 // a whole tab, pinned items included
 	clipSearchWait = 120 * time.Millisecond
 	clipRevealWait = 100 * time.Millisecond // longest wait for walk's layout
-	clipHint       = "Enter 粘贴 · Shift+Enter 纯文本 · Ctrl+P 置顶 · F2 编辑 · Del 删除 · 右键更多"
-	clipEditHint   = "Ctrl+S 保存 · Esc 取消（保存后去掉原有格式）"
 	fillStretch    = 1000 // against the default 1 of every other item
 )
 
@@ -81,7 +80,7 @@ func storeCtx() (context.Context, context.CancelFunc) {
 
 // NewClipPanel makes the panel, hidden; Show opens it.
 func NewClipPanel(opts ClipPanelOptions) (*ClipPanel, error) {
-	mw, err := newWindow("SnipGlyph · 剪贴板", &walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
+	mw, err := newWindow(i18n.Current().ClipTitle, &walk.MainWindowCfg{DisableMaximize: true, DisableMinimize: true, DisableResizing: true})
 	if err != nil {
 		return nil, err
 	}
@@ -244,14 +243,15 @@ func (p *ClipPanel) build() error {
 		return err
 	}
 	bar.Layout().SetMargins(walk.Margins{HNear: 12, VNear: 6, HFar: 6, VFar: 2})
-	title, err := label(bar, "剪贴板历史", colorMuted, nil)
+	tr := i18n.Current()
+	title, err := label(bar, tr.ClipHeader, colorMuted, nil)
 	if err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(bar); err != nil {
 		return err
 	}
-	if _, err := newIconButton(bar, glyphClose, "关闭（Esc）", true, p.Hide); err != nil {
+	if _, err := newIconButton(bar, glyphClose, tr.PopupCloseTip, true, p.Hide); err != nil {
 		return err
 	}
 	dragBy(mw, bar)
@@ -275,7 +275,7 @@ func (p *ClipPanel) build() error {
 	if p.search, err = walk.NewLineEdit(body); err != nil {
 		return err
 	}
-	setCueBanner(p.search, "搜索当前标签，空格分隔多个关键字")
+	setCueBanner(p.search, tr.ClipSearchCue)
 	p.search.TextChanged().Attach(p.searchSoon)
 
 	if p.tabs, err = newTabStrip(body); err != nil {
@@ -340,7 +340,7 @@ func (p *ClipPanel) build() error {
 	if err != nil {
 		return err
 	}
-	if p.hint, err = label(foot, clipHint, colorMuted, nil); err != nil {
+	if p.hint, err = label(foot, tr.ClipHint, colorMuted, nil); err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(foot); err != nil {
@@ -367,6 +367,12 @@ func (p *ClipPanel) loadTabs(sel int64) error {
 	tabs, err := p.opts.Store.Tabs(ctx)
 	if err != nil {
 		return err
+	}
+	// The default tab cannot be renamed; display its name in the active UI language.
+	for i := range tabs {
+		if tabs[i].ID == cliphist.DefaultTab {
+			tabs[i].Name = i18n.Current().ClipDefaultTab
+		}
 	}
 	p.tabList, p.tab = tabs, 0
 	for i, t := range tabs {
@@ -405,31 +411,32 @@ func (p *ClipPanel) searchSoon() {
 
 // reload lists the current tab, keeping item keep selected if it is there.
 func (p *ClipPanel) reload(keep int64) {
+	tr := i18n.Current()
 	ctx, cancel := storeCtx()
 	defer cancel()
 	query := strings.TrimSpace(p.search.Text())
 	items, err := p.opts.Store.List(ctx, p.tabID(), query, clipListLimit)
 	if err != nil {
 		slog.Warn("list clipboard history", "err", err)
-		p.list.empty = "读取剪贴板记录失败：" + err.Error()
+		p.list.empty = fmt.Sprintf(tr.ClipReadFailed, err.Error())
 		p.list.setItems(nil, 0)
 		return
 	}
 	switch {
 	case query != "":
-		p.list.empty = "没有找到"
+		p.list.empty = tr.ClipEmptySearch
 	case p.tabID() != cliphist.DefaultTab:
-		p.list.empty = "这个标签还是空的。\n在条目上右键，选「移动到」或「复制到」。"
+		p.list.empty = tr.ClipEmptyTab
 	case !p.opts.Recording:
-		p.list.empty = "剪贴板记录已关闭，可在设置中开启。"
+		p.list.empty = tr.ClipEmptyPaused
 	default:
-		p.list.empty = "还没有记录。\n复制的文字、图片和文件会出现在这里。"
+		p.list.empty = tr.ClipEmptyDefault
 	}
 	p.list.setItems(items, keep)
 	if query != "" {
-		p.count.SetText(fmt.Sprintf("找到 %d 条", len(items)))
+		p.count.SetText(fmt.Sprintf(tr.ClipFoundCount, len(items)))
 	} else {
-		p.count.SetText(fmt.Sprintf("共 %d 条", len(items)))
+		p.count.SetText(fmt.Sprintf(tr.ClipTotalCount, len(items)))
 	}
 }
 
@@ -512,15 +519,16 @@ func (p *ClipPanel) copyTo(tab int64) {
 func (p *ClipPanel) showError(err error) {
 	slog.Warn("clipboard panel", "err", err)
 	p.hint.SetTextColor(colorError)
-	p.hint.SetText("操作失败：" + err.Error())
+	p.hint.SetText(fmt.Sprintf(i18n.Current().OpFailed, err.Error()))
 }
 
 func (p *ClipPanel) resetHint() {
+	tr := i18n.Current()
 	p.hint.SetTextColor(colorMuted)
 	if p.editing != 0 {
-		p.hint.SetText(clipEditHint)
+		p.hint.SetText(tr.ClipEditHint)
 	} else {
-		p.hint.SetText(clipHint)
+		p.hint.SetText(tr.ClipHint)
 	}
 }
 
@@ -572,7 +580,7 @@ func (p *ClipPanel) askName(label, initial string, ok func(name string) error) {
 	p.promptE.SetText(initial)
 	p.onPrompt = ok
 	p.hint.SetTextColor(colorMuted)
-	p.hint.SetText("Enter 确定 · Esc 取消")
+	p.hint.SetText(i18n.Current().ClipPromptHint)
 	setShown(p.prompt, true)
 	p.promptE.SetFocus()
 	p.promptE.SetTextSelection(0, -1)
@@ -582,7 +590,7 @@ func (p *ClipPanel) endPrompt(confirm bool) {
 	if confirm {
 		if err := p.onPrompt(p.promptE.Text()); err != nil {
 			if errors.Is(err, cliphist.ErrTabExists) {
-				err = errors.New("已经有同名的标签")
+				err = errors.New(i18n.Current().ClipTabExists)
 			}
 			p.showError(err)
 			return
@@ -595,7 +603,7 @@ func (p *ClipPanel) endPrompt(confirm bool) {
 }
 
 func (p *ClipPanel) addTab() {
-	p.askName("新标签名称", "", func(name string) error {
+	p.askName(i18n.Current().ClipNewTabLabel, "", func(name string) error {
 		ctx, cancel := storeCtx()
 		defer cancel()
 		t, err := p.opts.Store.AddTab(ctx, name)
@@ -612,7 +620,7 @@ func (p *ClipPanel) addTab() {
 
 func (p *ClipPanel) renameTab(i int) {
 	t := p.tabList[i]
-	p.askName("标签名称", t.Name, func(name string) error {
+	p.askName(i18n.Current().ClipRenameTabLabel, t.Name, func(name string) error {
 		ctx, cancel := storeCtx()
 		defer cancel()
 		if err := p.opts.Store.RenameTab(ctx, t.ID, name); err != nil {
@@ -625,7 +633,8 @@ func (p *ClipPanel) renameTab(i int) {
 func (p *ClipPanel) deleteTab(i int) {
 	t := p.tabList[i]
 	p.holdOpen++
-	answer := walk.MsgBox(p.mw, "删除标签", fmt.Sprintf("删除标签「%s」和其中的全部条目？", t.Name),
+	tr := i18n.Current()
+	answer := walk.MsgBox(p.mw, tr.ClipDeleteTabTitle, fmt.Sprintf(tr.ClipDeleteTabConfirm, t.Name),
 		walk.MsgBoxYesNo|walk.MsgBoxIconWarning|walk.MsgBoxDefButton2)
 	p.holdOpen--
 	if answer != walk.DlgCmdYes {
@@ -647,6 +656,7 @@ func (p *ClipPanel) deleteTab(i int) {
 
 // itemMenuFor fills the item context menu before it opens.
 func (p *ClipPanel) itemMenuFor(int) {
+	tr := i18n.Current()
 	acts := p.itemMenu.Actions()
 	acts.Clear()
 	it, ok := p.selected()
@@ -660,21 +670,21 @@ func (p *ClipPanel) itemMenuFor(int) {
 		a.Triggered().Attach(func() { p.later(f) })
 		list.Add(a)
 	}
-	add(acts, "粘贴\tEnter", true, func() { p.paste(false) })
-	add(acts, "以纯文本粘贴\tShift+Enter", it.Kind == cliphist.Text && it.Rich, func() { p.paste(true) })
-	add(acts, "复制\tCtrl+C", true, p.copyItem)
+	add(acts, tr.ClipMenuPaste, true, func() { p.paste(false) })
+	add(acts, tr.ClipMenuPastePlain, it.Kind == cliphist.Text && it.Rich, func() { p.paste(true) })
+	add(acts, tr.ClipMenuCopy, true, p.copyItem)
 	acts.Add(walk.NewSeparatorAction())
-	pin := "置顶\tCtrl+P"
+	pin := tr.ClipMenuPin
 	if it.Pinned {
-		pin = "取消置顶\tCtrl+P"
+		pin = tr.ClipMenuUnpin
 	}
 	add(acts, pin, true, p.togglePin)
-	add(acts, "编辑\tF2", it.Kind == cliphist.Text, p.startEdit)
+	add(acts, tr.ClipMenuEdit, it.Kind == cliphist.Text, p.startEdit)
 	for _, sub := range []struct {
 		menu *walk.Menu
 		text string
 		f    func(int64)
-	}{{p.moveMenu, "移动到", p.moveTo}, {p.copyMenu, "复制到", p.copyTo}} {
+	}{{p.moveMenu, tr.ClipMenuMoveTo, p.moveTo}, {p.copyMenu, tr.ClipMenuCopyTo, p.copyTo}} {
 		subActs := sub.menu.Actions()
 		subActs.Clear()
 		for _, t := range p.tabList {
@@ -684,18 +694,19 @@ func (p *ClipPanel) itemMenuFor(int) {
 			}
 		}
 		if subActs.Len() == 0 {
-			add(subActs, "（没有其他标签，点标签栏的 + 新建）", false, func() {})
+			add(subActs, tr.ClipMenuNoOtherTabs, false, func() {})
 		}
 		a := walk.NewMenuAction(sub.menu)
 		a.SetText(sub.text)
 		acts.Add(a)
 	}
 	acts.Add(walk.NewSeparatorAction())
-	add(acts, "删除\tDel", true, p.deleteItem)
+	add(acts, tr.ClipMenuDelete, true, p.deleteItem)
 }
 
 // tabMenuFor fills the tab context menu for tab i before it opens.
 func (p *ClipPanel) tabMenuFor(i int) {
+	tr := i18n.Current()
 	acts := p.tabMenu.Actions()
 	acts.Clear()
 	p.menuTab = i
@@ -705,10 +716,10 @@ func (p *ClipPanel) tabMenuFor(i int) {
 		a.Triggered().Attach(func() { p.later(f) })
 		acts.Add(a)
 	}
-	add("新建标签…", p.addTab)
+	add(tr.ClipTabNew, p.addTab)
 	if i > 0 && i < len(p.tabList) {
-		add("重命名…", func() { p.renameTab(i) })
-		add("删除标签…", func() { p.deleteTab(i) })
+		add(tr.ClipTabRename, func() { p.renameTab(i) })
+		add(tr.ClipTabDelete, func() { p.deleteTab(i) })
 	}
 }
 

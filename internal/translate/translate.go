@@ -5,6 +5,8 @@ package translate
 import (
 	"context"
 	"unicode"
+
+	"SnipGlyph/internal/i18n"
 )
 
 // Lang is a language tag shared by all engines; each engine maps it to its
@@ -24,25 +26,14 @@ const (
 	Russian            Lang = "ru"
 )
 
-var langNames = map[Lang]string{
-	Auto:               "自动",
-	ChineseSimplified:  "简体中文",
-	ChineseTraditional: "繁体中文",
-	English:            "英语",
-	Japanese:           "日语",
-	Korean:             "韩语",
-	French:             "法语",
-	German:             "德语",
-	Spanish:            "西班牙语",
-	Russian:            "俄语",
-}
+
 
 // Targets are the languages offered as the translation target.
 var Targets = []Lang{ChineseSimplified, ChineseTraditional, English, Japanese, Korean, French, German, Spanish, Russian}
 
-// Name is the Chinese display name, or the tag itself if unknown.
+// Name is the localized display name, or the tag itself if unknown.
 func (l Lang) Name() string {
-	if n, ok := langNames[l]; ok {
+	if n, ok := i18n.Current().LangNames[string(l)]; ok {
 		return n
 	}
 	return string(l)

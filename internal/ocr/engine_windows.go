@@ -1,6 +1,7 @@
 package ocr
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -57,23 +58,45 @@ type Engine struct {
 	procOpts uintptr
 }
 
-// OpenEngine stages inst's DLLs under cacheDir, loads them and builds the
-// recognition pipeline (about half a second). The DLLs stay loaded for the
-// life of the process.
+// OpenEngine loads inst's DLLs (staging them under cacheDir when needed) and
+// builds the recognition pipeline (about half a second). The DLLs stay loaded
+// for the life of the process.
 func OpenEngine(inst Install, cacheDir string) (*Engine, error) {
-	dllDir, err := stage(inst, cacheDir)
-	if err != nil {
-		return nil, fmt.Errorf("复制 OneOCR 文件失败：%w", err)
-	}
 	e := &Engine{}
-	if err := e.load(dllDir); err != nil {
-		return nil, err
+	var stagedDir string
+	if !inst.NeedsStage {
+		if err := e.load(inst.Dir); err != nil {
+			// If a user copied DLLs out of WindowsApps keeping their restrictive
+			// execute ACL, fall back to staging them into cacheDir.
+			if !errors.Is(err, windows.ERROR_ACCESS_DENIED) || cacheDir == "" {
+				return nil, err
+			}
+			dllDir, serr := stage(inst, cacheDir)
+			if serr != nil {
+				return nil, wrapErr(ErrCodeStageFailed, "", serr)
+			}
+			if lerr := e.load(dllDir); lerr != nil {
+				return nil, lerr
+			}
+			stagedDir = dllDir
+		}
+	} else {
+		dllDir, err := stage(inst, cacheDir)
+		if err != nil {
+			return nil, wrapErr(ErrCodeStageFailed, "", err)
+		}
+		if err := e.load(dllDir); err != nil {
+			return nil, err
+		}
+		stagedDir = dllDir
 	}
 	if err := e.init(filepath.Join(inst.Dir, modelName)); err != nil {
 		e.Close()
 		return nil, err
 	}
-	pruneStaged(cacheDir, dllDir)
+	if stagedDir != "" {
+		pruneStaged(cacheDir, stagedDir)
+	}
 	return e, nil
 }
 
@@ -81,11 +104,11 @@ func (e *Engine) load(dir string) error {
 	// oneocr.dll loads onnxruntime.dll by name at runtime; loading ours first
 	// by full path keeps it from picking up System32's older copy.
 	if _, err := windows.LoadLibraryEx(filepath.Join(dir, ortName), 0, windows.LOAD_WITH_ALTERED_SEARCH_PATH); err != nil {
-		return fmt.Errorf("加载 %s 失败：%w", ortName, err)
+		return dllLoadError(ortName, err)
 	}
 	dll, err := windows.LoadLibraryEx(filepath.Join(dir, dllName), 0, windows.LOAD_WITH_ALTERED_SEARCH_PATH)
 	if err != nil {
-		return fmt.Errorf("加载 %s 失败：%w", dllName, err)
+		return dllLoadError(dllName, err)
 	}
 	for _, f := range []struct {
 		name string
@@ -113,18 +136,25 @@ func (e *Engine) load(dir string) error {
 		{"ReleaseOcrProcessOptions", &e.p.ReleaseOcrProcessOptions},
 	} {
 		if *f.dst, err = windows.GetProcAddress(dll, f.name); err != nil {
-			return fmt.Errorf("OneOCR 缺少函数 %s（截图工具版本可能不兼容）：%w", f.name, err)
+			return wrapErr(ErrCodeMissingProc, f.name, err)
 		}
 	}
 	return nil
 }
 
+func dllLoadError(name string, err error) error {
+	if errors.Is(err, windows.ERROR_BAD_EXE_FORMAT) {
+		return wrapErr(ErrCodeBadArch, name, err)
+	}
+	return wrapErr(ErrCodeLoadDLL, name, err)
+}
+
 func (e *Engine) init(modelPath string) error {
 	if rc := call(e.p.CreateOcrInitOptions, ptr(&e.initOpts)); rc != 0 {
-		return fmt.Errorf("CreateOcrInitOptions 返回 %d", rc)
+		return &Error{Code: ErrCodePipelineInit, Arg: "CreateOcrInitOptions", Detail: fmt.Sprintf("%d", rc)}
 	}
 	if rc := call(e.p.OcrInitOptionsSetUseModelDelayLoad, e.initOpts, 0); rc != 0 {
-		return fmt.Errorf("OcrInitOptionsSetUseModelDelayLoad 返回 %d", rc)
+		return &Error{Code: ErrCodePipelineInit, Arg: "OcrInitOptionsSetUseModelDelayLoad", Detail: fmt.Sprintf("%d", rc)}
 	}
 	mp, err := ansiPath(modelPath)
 	if err != nil {
@@ -137,17 +167,17 @@ func (e *Engine) init(modelPath string) error {
 	switch rc {
 	case 0:
 	case 5:
-		return fmt.Errorf("OneOCR 无法打开模型文件 %s", modelPath)
+		return &Error{Code: ErrCodeModelOpen, Arg: modelPath}
 	case 6:
-		return fmt.Errorf("OneOCR 模型密钥不匹配，截图工具可能已更新为不兼容的版本")
+		return &Error{Code: ErrCodeModelKey}
 	default:
-		return fmt.Errorf("CreateOcrPipeline 返回 %d", rc)
+		return &Error{Code: ErrCodePipelineInit, Arg: "CreateOcrPipeline", Detail: fmt.Sprintf("%d", rc)}
 	}
 	if rc := call(e.p.CreateOcrProcessOptions, ptr(&e.procOpts)); rc != 0 {
-		return fmt.Errorf("CreateOcrProcessOptions 返回 %d", rc)
+		return &Error{Code: ErrCodePipelineInit, Arg: "CreateOcrProcessOptions", Detail: fmt.Sprintf("%d", rc)}
 	}
 	if rc := call(e.p.OcrProcessOptionsSetMaxRecognitionLineCount, e.procOpts, maxLines); rc != 0 {
-		return fmt.Errorf("OcrProcessOptionsSetMaxRecognitionLineCount 返回 %d", rc)
+		return &Error{Code: ErrCodePipelineInit, Arg: "OcrProcessOptionsSetMaxRecognitionLineCount", Detail: fmt.Sprintf("%d", rc)}
 	}
 	return nil
 }
@@ -182,7 +212,7 @@ func (e *Engine) run(img Image) (Result, error) {
 	rc := call(e.p.RunOcrPipeline, e.pipeline, uintptr(unsafe.Pointer(oi)), e.procOpts, ptr(&res))
 	runtime.KeepAlive(oi)
 	if rc != 0 {
-		return Result{}, fmt.Errorf("RunOcrPipeline 返回 %d", rc)
+		return Result{}, &Error{Code: ErrCodePipelineInit, Arg: "RunOcrPipeline", Detail: fmt.Sprintf("%d", rc)}
 	}
 	defer syscall.SyscallN(e.p.ReleaseOcrResult, res)
 
@@ -191,7 +221,7 @@ func (e *Engine) run(img Image) (Result, error) {
 	call(e.p.GetImageAngle, res, ptr(&out.Angle))
 	var n int64
 	if rc := call(e.p.GetOcrLineCount, res, ptr(&n)); rc != 0 {
-		return Result{}, fmt.Errorf("GetOcrLineCount 返回 %d", rc)
+		return Result{}, &Error{Code: ErrCodePipelineInit, Arg: "GetOcrLineCount", Detail: fmt.Sprintf("%d", rc)}
 	}
 	for i := int64(0); i < n; i++ {
 		var line uintptr

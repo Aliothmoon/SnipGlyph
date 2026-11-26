@@ -3,8 +3,6 @@ package ocr
 import (
 	"bufio"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -100,10 +98,10 @@ func (c *Client) Recognize(ctx context.Context, img Image) (Result, error) {
 	}
 	if r.err != nil {
 		c.stop(false)
-		return Result{}, fmt.Errorf("OCR 进程通信失败：%w", r.err)
+		return Result{}, wrapErr(ErrCodeWorkerIO, "", r.err)
 	}
-	if r.resp.Error != "" {
-		return Result{}, errors.New(r.resp.Error)
+	if err := r.resp.err(); err != nil {
+		return Result{}, err
 	}
 	return r.resp.Result, nil
 }
@@ -130,10 +128,10 @@ func (c *Client) ensure() error {
 	if err != nil {
 		return err
 	}
-	if h.Error != "" {
+	if err := h.err(); err != nil {
 		c.w = w
 		c.stop(true)
-		return errors.New(h.Error)
+		return err
 	}
 	c.w, c.version = w, h.Version
 	c.gen++
@@ -176,7 +174,7 @@ func (c *Client) start() (*worker, hello, error) {
 		inW.Close()
 		outR.Close()
 		errR.Close()
-		return nil, hello{}, fmt.Errorf("启动 OCR 进程失败：%w", err)
+		return nil, hello{}, wrapErr(ErrCodeWorkerStart, "", err)
 	}
 	w := &worker{cmd: cmd, stdin: inW, stdout: bufio.NewReader(outR), rawOut: outR, exited: make(chan struct{})}
 	go forwardLog(errR, cmd.Process.Pid)
@@ -199,14 +197,14 @@ func (c *Client) start() (*worker, hello, error) {
 	case r := <-ch:
 		if r.err != nil {
 			w.kill()
-			return nil, hello{}, fmt.Errorf("OCR 进程启动失败：%w", r.err)
+			return nil, hello{}, wrapErr(ErrCodeWorkerStart, "", r.err)
 		}
-		slog.Info("ocr worker ready", "pid", cmd.Process.Pid, "version", r.h.Version, "took", time.Since(began).Round(time.Millisecond), "err", r.h.Error)
+		slog.Info("ocr worker ready", "pid", cmd.Process.Pid, "source", r.h.Source, "version", r.h.Version, "dir", r.h.Dir, "took", time.Since(began).Round(time.Millisecond), "err", r.h.Error)
 		return w, r.h, nil
 	case <-time.After(startTimeout):
 		w.kill()
 		<-ch
-		return nil, hello{}, errors.New("OCR 进程启动超时")
+		return nil, hello{}, &Error{Code: ErrCodeWorkerTimeout}
 	}
 }
 

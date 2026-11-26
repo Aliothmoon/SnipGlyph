@@ -11,6 +11,8 @@ import (
 	"path"
 	"strings"
 	"sync"
+
+	"SnipGlyph/internal/i18n"
 )
 
 // Proxy settings understood by Client.
@@ -33,12 +35,12 @@ func Client(setting string) (*http.Client, error) {
 	default:
 		u, err := url.Parse(s)
 		if err != nil || u.Host == "" {
-			return nil, fmt.Errorf("代理地址 %q 无效，应形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080", s)
+			return nil, fmt.Errorf(i18n.Current().ProxyInvalidURL, s)
 		}
 		switch u.Scheme {
 		case "http", "https", "socks5", "socks5h":
 		default:
-			return nil, fmt.Errorf("不支持的代理协议 %q", u.Scheme)
+			return nil, fmt.Errorf(i18n.Current().ProxyUnsupportedScheme, u.Scheme)
 		}
 		t.Proxy = http.ProxyURL(u)
 	}

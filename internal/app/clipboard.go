@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/cliphist"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/input"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
@@ -36,7 +38,7 @@ func (a *App) openClipboard() string {
 	st, err := cliphist.Open(a.opts.ClipboardPath, a.cfg.Clipboard.Limit)
 	if err != nil {
 		slog.Error("open clipboard history", "path", a.opts.ClipboardPath, "err", err)
-		return "剪贴板历史不可用：" + err.Error()
+		return fmt.Sprintf(i18n.Current().ClipUnavailable, err.Error())
 	}
 	a.clip = st
 	return a.applyClipboard()
@@ -58,7 +60,7 @@ func (a *App) applyClipboard() string {
 		if err := winclip.Watch(ctx, a.clipChanged); err != nil {
 			stop()
 			slog.Error("watch clipboard", "err", err)
-			return "无法监听剪贴板：" + err.Error()
+			return fmt.Sprintf(i18n.Current().ClipWatchFailed, err.Error())
 		}
 		a.clipStop = stop
 		slog.Info("recording the clipboard")
@@ -142,6 +144,26 @@ func (a *App) makeClipPanel() error {
 	return nil
 }
 
+// rebuildClipPanel recreates the pre-built clipboard panel so a UI language
+// change takes effect immediately. UI thread.
+func (a *App) rebuildClipPanel() {
+	if a.clipPanel == nil {
+		return
+	}
+	wasVisible := a.clipPanel.Visible()
+	a.clipPanel.Dispose()
+	a.clipPanel = nil
+	if err := a.makeClipPanel(); err != nil {
+		slog.Error("rebuild clipboard panel", "err", err)
+		return
+	}
+	if wasVisible {
+		if err := a.clipPanel.Show(); err != nil {
+			slog.Error("reshow clipboard panel", "err", err)
+		}
+	}
+}
+
 // toggleClipPanel shows the clipboard panel, or hides it if shown. UI
 // thread.
 func (a *App) toggleClipPanel() {
@@ -149,8 +171,9 @@ func (a *App) toggleClipPanel() {
 		a.clipPanel.Hide()
 		return
 	}
+	tr := i18n.Current()
 	if a.clip == nil {
-		a.tray.Warn("剪贴板历史", "剪贴板历史不可用，原因见日志")
+		a.tray.Warn(ClipboardHistory.String(), tr.ClipUnavailableLog)
 		return
 	}
 	err := a.makeClipPanel()
@@ -160,7 +183,7 @@ func (a *App) toggleClipPanel() {
 	}
 	if err != nil {
 		slog.Error("open clipboard panel", "err", err)
-		a.tray.Warn("剪贴板历史", "无法打开面板："+err.Error())
+		a.tray.Warn(ClipboardHistory.String(), fmt.Sprintf(tr.OpenClipPanelFailed, err.Error()))
 	}
 }
 
@@ -217,7 +240,7 @@ func (a *App) putClip(id int64, plain bool, after func()) {
 		}()
 		if err != nil {
 			slog.Warn("put clipboard item", "id", id, "err", err)
-			toast.Show("无法放入剪贴板："+err.Error(), cursorAnchor())
+			toast.Show(fmt.Sprintf(i18n.Current().PutToClipFailed, err.Error()), cursorAnchor())
 			return
 		}
 		if after != nil {

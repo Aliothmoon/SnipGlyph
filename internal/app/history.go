@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/tailscale/walk"
 
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 )
 
 // record is the history entry of one popup or silent OCR. Once a write is
@@ -29,7 +31,7 @@ func (a *App) openHistory() string {
 	st, err := history.Open(a.opts.HistoryPath, history.DefaultLimit)
 	if err != nil {
 		slog.Error("open history", "path", a.opts.HistoryPath, "err", err)
-		return "历史记录不可用：" + err.Error()
+		return fmt.Sprintf(i18n.Current().HistoryUnavailable, err.Error())
 	}
 	a.hist = st
 	a.histq = make(chan func(), historyQueue)

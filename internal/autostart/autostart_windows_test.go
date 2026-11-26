@@ -68,3 +68,26 @@ func TestEnableDisable(t *testing.T) {
 		t.Errorf("disabling twice: %v", err)
 	}
 }
+
+func TestEnableWithArgs(t *testing.T) {
+	scratch(t)
+	const name = "SnipGlyphTestArgs"
+	exe := `C:\Tools\Snip Glyph\snipglyph.exe`
+
+	if err := Enable(name, exe, "--portable"); err != nil {
+		t.Fatal(err)
+	}
+	on, cmd, err := Status(name)
+	if err != nil || !on || cmd != `"C:\Tools\Snip Glyph\snipglyph.exe" --portable` {
+		t.Fatalf("after enable: on=%v cmd=%q err=%v", on, cmd, err)
+	}
+	if !Points(cmd, `c:\tools\snip glyph\SNIPGLYPH.EXE`, "--portable") {
+		t.Errorf("Points with matching args returned false for %q", cmd)
+	}
+	if Points(cmd, exe) {
+		t.Errorf("Points without args should be false for %q", cmd)
+	}
+	if Points(cmd, exe, "--other") {
+		t.Errorf("Points with different args should be false for %q", cmd)
+	}
+}

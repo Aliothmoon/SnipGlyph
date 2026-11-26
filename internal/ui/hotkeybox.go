@@ -7,7 +7,10 @@ import (
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
 
+	"fmt"
+
 	"SnipGlyph/internal/hotkey"
+	"SnipGlyph/internal/i18n"
 )
 
 var procImmAssociateContext = windows.NewLazySystemDLL("imm32.dll").NewProc("ImmAssociateContext")
@@ -35,7 +38,7 @@ func newHotkeyBox(parent walk.Container, value string, onInput func(string)) (*h
 	le.SetReadOnly(true)
 	setBackground(le, colorCard) // read-only edits are grey otherwise
 	le.SetTextAlignment(walk.AlignCenter)
-	le.SetCueBanner("未设置")
+	le.SetCueBanner(i18n.Current().HotkeyUnset)
 	// Keys only: no IME composition window over the box.
 	procImmAssociateContext.Call(uintptr(le.Handle()), 0)
 	b.set(value)
@@ -79,19 +82,20 @@ func (b *hotkeyBox) handle(msg *win.MSG) bool {
 		return true
 	}
 	hk := hotkey.Hotkey{Mods: mods, Key: vk}
+	tr := i18n.Current()
 	switch err := hk.Valid(); {
 	case errors.Is(err, hotkey.ErrReserved):
 		// Let it do its usual job: Alt+F4 still closes the window.
 		b.le.SetText(b.value)
-		b.onInput(hk.String() + " 是系统和各程序通用的组合键，不能用作快捷键")
+		b.onInput(fmt.Sprintf(tr.HotkeyReserved, hk.String()))
 		return false
 	case errors.Is(err, hotkey.ErrNeedsModifier):
 		b.le.SetText(b.value)
-		b.onInput("快捷键要包含 Win、Ctrl 或 Alt（F1–F24、PrintScreen、Pause 除外）")
+		b.onInput(tr.HotkeyNeedsMod)
 		return true
 	case err != nil:
 		b.le.SetText(b.value)
-		b.onInput("不支持这个按键")
+		b.onInput(tr.HotkeyUnsupported)
 		return true
 	}
 	b.set(hk.String())

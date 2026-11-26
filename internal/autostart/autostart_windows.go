@@ -51,15 +51,15 @@ func disabledInTaskManager(name string) bool {
 	return err == nil && len(v) > 0 && v[0]&1 != 0
 }
 
-// Enable makes exe start at sign-in under name, replacing any earlier
-// path, and clears a Task Manager switch-off.
-func Enable(name, exe string) error {
+// Enable makes exe start at sign-in under name (with optional args), replacing
+// any earlier path, and clears a Task Manager switch-off.
+func Enable(name, exe string, args ...string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
 	defer k.Close()
-	if err := k.SetStringValue(name, Quote(exe)); err != nil {
+	if err := k.SetStringValue(name, Command(exe, args...)); err != nil {
 		return err
 	}
 	return deleteValue(approvedKey, name)
@@ -92,8 +92,50 @@ func deleteValue(key, name string) error {
 // spaces in it are not taken as argument separators.
 func Quote(exe string) string { return `"` + exe + `"` }
 
-// Points reports whether command runs exe (case-insensitively, as Windows
-// paths are).
-func Points(command, exe string) bool {
-	return strings.EqualFold(strings.Trim(strings.TrimSpace(command), `"`), exe)
+// Command returns the Run command line for exe and any extra arguments.
+func Command(exe string, args ...string) string {
+	cmd := Quote(exe)
+	if extra := formatArgs(args); extra != "" {
+		cmd += " " + extra
+	}
+	return cmd
+}
+
+// Points reports whether command runs exe with the exact args
+// (comparing exe case-insensitively, as Windows paths are).
+func Points(command, exe string, args ...string) bool {
+	s := strings.TrimSpace(command)
+	var cmdExe, rest string
+	if strings.HasPrefix(s, `"`) {
+		end := strings.Index(s[1:], `"`)
+		if end < 0 {
+			return false
+		}
+		cmdExe = s[1 : 1+end]
+		rest = strings.TrimSpace(s[2+end:])
+	} else if len(args) == 0 {
+		return strings.EqualFold(s, exe)
+	} else {
+		cmdExe, rest, _ = strings.Cut(s, " ")
+		rest = strings.TrimSpace(rest)
+	}
+	if !strings.EqualFold(cmdExe, exe) {
+		return false
+	}
+	return rest == formatArgs(args)
+}
+
+func formatArgs(args []string) string {
+	var parts []string
+	for _, a := range args {
+		if a == "" {
+			continue
+		}
+		if strings.ContainsAny(a, " \t") {
+			parts = append(parts, `"`+a+`"`)
+		} else {
+			parts = append(parts, a)
+		}
+	}
+	return strings.Join(parts, " ")
 }

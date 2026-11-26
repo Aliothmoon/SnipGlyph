@@ -1,13 +1,16 @@
-// Package app wires hotkeys, the tray and (later) the OCR / translation
-// pipelines together.
+// Package app wires hotkeys, the tray and the OCR / translation pipelines
+// together.
 package app
 
 import (
 	"errors"
 	"fmt"
 	"image"
+	"io/fs"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/hotkey"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/input"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/translate"
@@ -41,21 +45,40 @@ const (
 var allActions = []Action{ScreenshotOCR, SilentOCR, ScreenshotTranslate, SelectionTranslate, InputTranslate, ClipboardHistory}
 
 func (a Action) String() string {
+	tr := i18n.Current()
 	switch a {
 	case ScreenshotOCR:
-		return "截图 OCR"
+		return tr.ActionScreenshotOCR
 	case SilentOCR:
-		return "静默 OCR"
+		return tr.ActionSilentOCR
 	case ScreenshotTranslate:
-		return "截图翻译"
+		return tr.ActionScreenshotTranslate
 	case SelectionTranslate:
-		return "划词翻译"
+		return tr.ActionSelectionTranslate
 	case InputTranslate:
-		return "输入翻译"
+		return tr.ActionInputTranslate
 	case ClipboardHistory:
-		return "剪贴板历史"
+		return tr.ActionClipboardHistory
 	}
 	return fmt.Sprintf("Action(%d)", int(a))
+}
+
+func (a Action) logName() string {
+	switch a {
+	case ScreenshotOCR:
+		return "screenshot_ocr"
+	case SilentOCR:
+		return "silent_ocr"
+	case ScreenshotTranslate:
+		return "screenshot_translate"
+	case SelectionTranslate:
+		return "selection_translate"
+	case InputTranslate:
+		return "input_translate"
+	case ClipboardHistory:
+		return "clipboard_history"
+	}
+	return fmt.Sprintf("action_%d", int(a))
 }
 
 func (a Action) hotkey(h config.Hotkeys) string {
@@ -77,6 +100,7 @@ func (a Action) hotkey(h config.Hotkeys) string {
 }
 
 type Options struct {
+	Portable   bool
 	ConfigPath string
 	ConfigDir  string
 	LogDir     string
@@ -84,24 +108,27 @@ type Options struct {
 	// clipboard history database.
 	HistoryPath   string
 	ClipboardPath string
-	// Exe is this program, for the autostart entry.
+	// Exe is this program, for the autostart entry and local OneOCR lookup.
 	Exe string
+	// AutostartArgs are extra flags preserved in the Windows Run command.
+	AutostartArgs []string
 	// OCRWorker returns the command for an OCR worker process: one that
-	// calls ocr.ServeWorker on its stdin/stdout.
-	OCRWorker func() *exec.Cmd
+	// calls ocr.ServeWorkerWith on its stdin/stdout.
+	OCRWorker func(customDir string) *exec.Cmd
 }
 
 // ocrIdle is how long an unused OCR worker (~150 MB) stays alive.
 const ocrIdle = 10 * time.Minute
 
 type App struct {
-	opts  Options
-	cfg   config.Config
-	hk    *hotkey.Manager
-	tray  *ui.Tray
-	bound map[Action]hotkey.Hotkey
-	ocr   *ocr.Client
-	busy  atomic.Bool // a screenshot flow is running
+	opts   Options
+	cfg    config.Config
+	hk     *hotkey.Manager
+	tray   *ui.Tray
+	bound  map[Action]hotkey.Hotkey
+	ocr    *ocr.Client
+	ocrDir atomic.Value // string; custom OneOCR dir read off UI thread
+	busy   atomic.Bool  // a screenshot flow is running
 
 	grabbing atomic.Bool // a selection is being read
 
@@ -121,6 +148,13 @@ type App struct {
 	clipboard
 }
 
+func (a *App) currentOCRDir() string {
+	if s, ok := a.ocrDir.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+
 // Run starts the tray app and blocks until the user exits. It must be called
 // from the main goroutine.
 func Run(opts Options) error {
@@ -130,11 +164,17 @@ func Run(opts Options) error {
 	}
 	walkApp.SetProductName("SnipGlyph")
 
-	a := &App{opts: opts, ocr: ocr.NewClient(opts.OCRWorker, ocrIdle)}
+	a := &App{opts: opts}
+	a.ocrDir.Store("")
+	a.ocr = ocr.NewClient(func() *exec.Cmd { return opts.OCRWorker(a.currentOCRDir()) }, ocrIdle)
 	defer a.ocr.Close()
 	var problems []string
 	if err := a.loadConfig(); err != nil {
-		problems = append(problems, "配置文件有误，已使用默认设置："+err.Error())
+		if errors.Is(err, config.ErrSecretUnreadable) {
+			problems = append(problems, i18n.Current().TraySecretUnreadable)
+		} else {
+			problems = append(problems, fmt.Sprintf(i18n.Current().TrayConfigError, err.Error()))
+		}
 	}
 
 	if a.hk, err = hotkey.NewManager(); err != nil {
@@ -157,13 +197,16 @@ func Run(opts Options) error {
 	}
 	defer a.tray.Dispose()
 
-	if inst, err := ocr.Locate(); err != nil {
-		problems = append(problems, "OCR 不可用："+err.Error())
+	if inst, err := ocr.LocateWith(ocr.LocateOptions{
+		ExeDir:    filepath.Dir(opts.Exe),
+		CustomDir: a.cfg.OCR.Dir,
+	}); err != nil {
+		problems = append(problems, fmt.Sprintf(i18n.Current().TrayOCRUnavailable, formatOCRError(err)))
 	} else {
-		slog.Info("snipping tool found", "version", inst.Version, "dir", inst.Dir)
+		slog.Info("oneocr located", "source", inst.Source, "version", inst.Version, "dir", inst.Dir)
 	}
 	if len(problems) > 0 {
-		a.tray.Warn("SnipGlyph 启动时发现问题", strings.Join(problems, "\n"))
+		a.tray.Warn(i18n.Current().TrayStartupProblemsTitle, strings.Join(problems, "\n"))
 	}
 
 	go func() {
@@ -178,7 +221,7 @@ func Run(opts Options) error {
 		}
 	})
 
-	slog.Info("ready")
+	slog.Info("ready", "lang", i18n.Active(), "portable", opts.Portable)
 	walkApp.Run()
 	slog.Info("exiting")
 	return nil
@@ -186,12 +229,21 @@ func Run(opts Options) error {
 
 // loadConfig reads the settings file, writing the defaults on first run.
 func (a *App) loadConfig() error {
+	_, statErr := os.Stat(a.opts.ConfigPath)
+	firstRun := errors.Is(statErr, fs.ErrNotExist)
+
 	cfg, err := config.Load(a.opts.ConfigPath)
+	if firstRun && err == nil && i18n.SystemLang() != i18n.ZhCN {
+		cfg.Translate.TargetLang = string(translate.English)
+	}
 	a.cfg = cfg
+	i18n.Set(i18n.Parse(cfg.Language))
+	a.ocrDir.Store(cfg.OCR.Dir)
+
 	if errors.Is(err, config.ErrSecretUnreadable) {
 		// Saving would replace the stored secret with nothing. Leave the
 		// file alone until the user enters the secret again.
-		return nil
+		return err
 	}
 	if err != nil {
 		slog.Error("load config", "err", err)
@@ -203,8 +255,19 @@ func (a *App) loadConfig() error {
 	return nil
 }
 
+// applyLanguageChange rebuilds long-lived UI windows after the UI language
+// changes. UI thread only.
+func (a *App) applyLanguageChange() {
+	a.rebuildClipPanel()
+	if a.histWin != nil {
+		a.histWin.Close()
+		a.openHistoryWindow()
+	}
+}
+
 // registerHotkeys (re)binds every action and returns human-readable problems.
 func (a *App) registerHotkeys() []string {
+	tr := i18n.Current()
 	a.bound = map[Action]hotkey.Hotkey{}
 	// Release them all first, so two actions can swap hotkeys.
 	for _, act := range allActions {
@@ -218,26 +281,27 @@ func (a *App) registerHotkeys() []string {
 		}
 		hk, err := hotkey.Parse(s)
 		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s（%s）：格式错误", act, s))
-			slog.Warn("bad hotkey", "action", act, "hotkey", s, "err", err)
+			problems = append(problems, fmt.Sprintf(tr.TrayHotkeyBadFormat, act, s))
+			slog.Warn("bad hotkey", "action", act.logName(), "hotkey", s, "err", err)
 			continue
 		}
 		if err := a.hk.Register(int(act), hk); err != nil {
-			reason := "注册失败"
+			reason := tr.TrayHotkeyRegFailed
 			if hotkey.IsTaken(err) {
-				reason = "已被其他程序占用"
+				reason = tr.TrayHotkeyTaken
 			}
-			problems = append(problems, fmt.Sprintf("%s（%s）：%s", act, hk, reason))
-			slog.Warn("register hotkey", "action", act, "hotkey", hk, "err", err)
+			problems = append(problems, fmt.Sprintf(tr.TrayHotkeyRegErr, act, hk, reason))
+			slog.Warn("register hotkey", "action", act.logName(), "hotkey", hk, "err", err)
 			continue
 		}
 		a.bound[act] = hk
-		slog.Info("hotkey registered", "action", act, "hotkey", hk)
+		slog.Info("hotkey registered", "action", act.logName(), "hotkey", hk)
 	}
 	return problems
 }
 
 func (a *App) menu() []ui.MenuItem {
+	tr := i18n.Current()
 	item := func(act Action) ui.MenuItem {
 		it := ui.MenuItem{Text: act.String(), OnClick: func() { a.trigger(act) }}
 		if hk, ok := a.bound[act]; ok {
@@ -252,45 +316,60 @@ func (a *App) menu() []ui.MenuItem {
 		item(InputTranslate),
 		item(ClipboardHistory),
 		{},
-		{Text: "历史记录", OnClick: a.openHistoryWindow},
-		{Text: "设置", OnClick: a.openSettings},
+		{Text: tr.TrayHistory, OnClick: a.openHistoryWindow},
+		{Text: tr.TraySettings, OnClick: a.openSettings},
 		{},
-		{Text: "重新加载配置", OnClick: a.reload},
-		{Text: "打开配置目录", OnClick: func() { openPath(a.opts.ConfigDir) }},
-		{Text: "打开日志目录", OnClick: func() { openPath(a.opts.LogDir) }},
+		{Text: tr.TrayReload, OnClick: a.reload},
+		{Text: tr.TrayOpenConfigDir, OnClick: func() { openPath(a.opts.ConfigDir) }},
+		{Text: tr.TrayOpenLogDir, OnClick: func() { openPath(a.opts.LogDir) }},
 		{},
-		{Text: "退出", OnClick: func() { walk.App().Exit(0) }},
+		{Text: tr.TrayExit, OnClick: func() { walk.App().Exit(0) }},
 	}
 }
 
 // reload re-reads the settings file, rebinds hotkeys and rebuilds the
 // translation engines. UI thread.
 func (a *App) reload() {
+	prevLang := i18n.Active()
+	prevOCRDir := a.cfg.OCR.Dir
+
 	cfgErr := a.loadConfig()
-	problems := append(a.registerHotkeys(), a.buildEngines()...)
+	if a.cfg.OCR.Dir != prevOCRDir {
+		a.ocr.Close()
+	}
+	var problems []string
+	if errors.Is(cfgErr, config.ErrSecretUnreadable) {
+		problems = append(problems, i18n.Current().TraySecretUnreadable)
+		cfgErr = nil
+	}
+	problems = append(problems, a.registerHotkeys()...)
+	problems = append(problems, a.buildEngines()...)
 	if err := a.tray.SetMenu(a.menu()); err != nil {
 		slog.Error("rebuild tray menu", "err", err)
 	}
-	if a.histWin != nil {
+	if i18n.Active() != prevLang {
+		a.applyLanguageChange()
+	} else if a.histWin != nil {
 		a.histWin.SetRecording(a.cfg.History.Enabled)
 	}
 	if p := a.applyClipboard(); p != "" {
 		problems = append(problems, p)
 	}
+	tr := i18n.Current()
 	switch {
 	case cfgErr != nil:
-		a.tray.Warn("配置文件有误，已使用默认设置", cfgErr.Error())
+		a.tray.Warn(tr.TrayConfigErrorTitle, cfgErr.Error())
 	case len(problems) > 0:
-		a.tray.Warn("配置中有问题", strings.Join(problems, "\n"))
+		a.tray.Warn(tr.TrayConfigProblemsTitle, strings.Join(problems, "\n"))
 	default:
-		a.tray.Info("配置已重新加载", "")
+		a.tray.Info(tr.TrayConfigReloaded, "")
 	}
 }
 
 // trigger starts an action without waiting for it. Safe to call from any
 // goroutine, including the UI thread.
 func (a *App) trigger(act Action) {
-	slog.Info("action triggered", "action", act)
+	slog.Info("action triggered", "action", act.logName())
 	switch act {
 	case ScreenshotOCR, ScreenshotTranslate:
 		go a.screenshotOCR(act, false)
@@ -308,8 +387,47 @@ func (a *App) trigger(act Action) {
 		input.MaskHotkey()
 		ui.Do(a.toggleClipPanel)
 	default:
-		a.tray.Info(act.String(), "功能开发中")
+		a.tray.Info(act.String(), i18n.Current().TrayFeatureWIP)
 	}
+}
+
+func formatOCRError(err error) string {
+	var oe *ocr.Error
+	if !errors.As(err, &oe) {
+		return err.Error()
+	}
+	tr := i18n.Current()
+	switch oe.Code {
+	case ocr.ErrCodeNotInstalled:
+		return tr.OCRNotInstalled
+	case ocr.ErrCodeCustomDirMissing:
+		return fmt.Sprintf(tr.OCRCustomDirMissing, oe.Arg, oe.Detail)
+	case ocr.ErrCodeStageFailed:
+		return fmt.Sprintf(tr.OCRStageFailed, oe.Detail)
+	case ocr.ErrCodeLoadDLL:
+		return fmt.Sprintf(tr.OCRLoadDLL, oe.Arg, oe.Detail)
+	case ocr.ErrCodeBadArch:
+		return fmt.Sprintf(tr.OCRBadArch, oe.Arg, oe.Detail)
+	case ocr.ErrCodeMissingProc:
+		return fmt.Sprintf(tr.OCRMissingProc, oe.Arg, oe.Detail)
+	case ocr.ErrCodeModelPathEncoding:
+		return fmt.Sprintf(tr.OCRModelPathEncoding, oe.Arg)
+	case ocr.ErrCodeModelOpen:
+		return fmt.Sprintf(tr.OCRModelOpen, oe.Arg)
+	case ocr.ErrCodeModelKey:
+		return tr.OCRModelKey
+	case ocr.ErrCodePipelineInit:
+		return fmt.Sprintf(tr.OCRPipelineInit, oe.Arg, oe.Detail)
+	case ocr.ErrCodeSelfTest:
+		return fmt.Sprintf(tr.OCRSelfTest, oe.Detail)
+	case ocr.ErrCodeWorkerStart:
+		return fmt.Sprintf(tr.OCRWorkerStart, oe.Detail)
+	case ocr.ErrCodeWorkerTimeout:
+		return tr.OCRWorkerTimeout
+	case ocr.ErrCodeWorkerIO:
+		return fmt.Sprintf(tr.OCRWorkerIO, oe.Detail)
+	}
+	return oe.Error()
 }
 
 // cursorAnchor is a one-pixel rectangle at the mouse pointer, for placing

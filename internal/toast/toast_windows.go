@@ -12,6 +12,8 @@ import (
 
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
+
+	"SnipGlyph/internal/i18n"
 )
 
 var (
@@ -169,7 +171,7 @@ func render(text string, px func(int) int) (*bitmap, error) {
 		// alpha channel over.
 		LfQuality: win.ANTIALIASED_QUALITY,
 	}
-	copy(lf.LfFaceName[:], windows.StringToUTF16("Microsoft YaHei UI"))
+	copy(lf.LfFaceName[:], windows.StringToUTF16(i18n.Current().FontFace))
 	font := win.CreateFontIndirect(&lf)
 	defer win.DeleteObject(win.HGDIOBJ(font))
 	oldFont := win.SelectObject(dc, win.HGDIOBJ(font))

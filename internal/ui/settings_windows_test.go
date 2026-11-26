@@ -13,6 +13,7 @@ import (
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
 	"SnipGlyph/internal/hotkey"
+	"SnipGlyph/internal/i18n"
 )
 
 // waitFor polls cond on the UI thread until it holds.
@@ -134,7 +135,7 @@ func TestSettingsWindow(t *testing.T) {
 			t.Errorf("Alt+F4 consumed or recorded: value %q", b.value)
 		}
 		press(hotkey.ModShift, 'A') // just a capital A
-		if b.value != "Win+Alt+Q" || s.keyHint.Text() == defaultKeyHint {
+		if b.value != "Win+Alt+Q" || s.keyHint.Text() == i18n.Current().SettingsKeyHint {
 			t.Errorf("Shift+A: value %q, hint %q", b.value, s.keyHint.Text())
 		}
 		c := s.boxes[3]

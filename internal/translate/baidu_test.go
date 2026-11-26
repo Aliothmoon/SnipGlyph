@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/netx"
 )
 
@@ -71,6 +72,28 @@ func TestBaiduErrors(t *testing.T) {
 	}
 	if _, err := (&Baidu{}).Translate(context.Background(), Request{Text: "x", From: Auto, To: English}, nil); err == nil {
 		t.Error("want error without credentials")
+	}
+}
+
+func TestBaiduEnglishLocalization(t *testing.T) {
+	orig := i18n.Active()
+	t.Cleanup(func() { i18n.Set(orig) })
+	i18n.Set(i18n.En)
+
+	if got := (&Baidu{}).Name(); got != "Baidu Translate" {
+		t.Errorf("Name() = %q", got)
+	}
+	if got := English.Name(); got != "English" {
+		t.Errorf("English.Name() = %q", got)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"error_code":"54001","error_msg":"Invalid Sign"}`))
+	}))
+	defer srv.Close()
+	eng := &Baidu{AppID: "id", Key: "bad", Endpoint: srv.URL, HTTP: srv.Client()}
+	_, err := eng.Translate(context.Background(), Request{Text: "hi", From: Auto, To: English}, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid signature") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

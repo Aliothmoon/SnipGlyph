@@ -24,26 +24,77 @@ import (
 
 const maxFrame = 1 << 30
 
+// WorkerOptions configures ServeWorkerWith.
+type WorkerOptions struct {
+	CacheDir  string
+	CustomDir string
+	ExeDir    string
+}
+
+type wireError struct {
+	Error       string  `json:"error,omitempty"`
+	ErrorCode   ErrCode `json:"error_code,omitempty"`
+	ErrorArg    string  `json:"error_arg,omitempty"`
+	ErrorDetail string  `json:"error_detail,omitempty"`
+}
+
+func makeWireError(err error) wireError {
+	if err == nil {
+		return wireError{}
+	}
+	var oe *Error
+	if errors.As(err, &oe) {
+		return wireError{
+			Error:       oe.Error(),
+			ErrorCode:   oe.Code,
+			ErrorArg:    oe.Arg,
+			ErrorDetail: oe.Detail,
+		}
+	}
+	return wireError{Error: err.Error()}
+}
+
+func (w wireError) err() error {
+	if w.ErrorCode != "" {
+		return &Error{Code: w.ErrorCode, Arg: w.ErrorArg, Detail: w.ErrorDetail}
+	}
+	if w.Error != "" {
+		return errors.New(w.Error)
+	}
+	return nil
+}
+
 type hello struct {
 	Version string `json:"version,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Source  Source `json:"source,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	wireError
 }
 
 type response struct {
 	Result Result `json:"result"`
-	Error  string `json:"error,omitempty"`
+	wireError
 }
 
 //go:embed testdata/selftest.png
 var selfTestPNG []byte
 
-// ServeWorker loads OneOCR (staging its DLLs under cacheDir), checks it on a
-// built-in image and then answers requests from r on w until r is closed.
+// ServeWorker loads OneOCR (staging its DLLs under cacheDir when needed),
+// checks it on a built-in image and then answers requests from r on w until
+// r is closed.
 func ServeWorker(r io.Reader, w io.Writer, cacheDir string) error {
-	inst, err := Locate()
+	return ServeWorkerWith(r, w, WorkerOptions{CacheDir: cacheDir})
+}
+
+// ServeWorkerWith is ServeWorker with explicit LocateOptions.
+func ServeWorkerWith(r io.Reader, w io.Writer, opts WorkerOptions) error {
+	inst, err := LocateWith(LocateOptions{
+		ExeDir:    opts.ExeDir,
+		CustomDir: opts.CustomDir,
+	})
 	var e *Engine
 	if err == nil {
-		e, err = OpenEngine(inst, cacheDir)
+		e, err = OpenEngine(inst, opts.CacheDir)
 	}
 	if err == nil {
 		if err = selfTest(e); err != nil {
@@ -51,11 +102,11 @@ func ServeWorker(r io.Reader, w io.Writer, cacheDir string) error {
 		}
 	}
 	if err != nil {
-		_ = writeJSON(w, hello{Error: err.Error()})
+		_ = writeJSON(w, hello{wireError: makeWireError(err)})
 		return err
 	}
 	defer e.Close()
-	if err := writeJSON(w, hello{Version: inst.Version}); err != nil {
+	if err := writeJSON(w, hello{Version: inst.Version, Source: inst.Source, Dir: inst.Dir}); err != nil {
 		return err
 	}
 
@@ -74,7 +125,7 @@ func ServeWorker(r io.Reader, w io.Writer, cacheDir string) error {
 			resp.Result, err = e.Recognize(img)
 		}
 		if err != nil {
-			resp.Error = err.Error()
+			resp.wireError = makeWireError(err)
 		}
 		if err := writeJSON(w, resp); err != nil {
 			return err
@@ -91,10 +142,10 @@ func selfTest(e *Engine) error {
 	}
 	res, err := e.Recognize(FromImage(src))
 	if err != nil {
-		return fmt.Errorf("OneOCR 自检失败：%w", err)
+		return wrapErr(ErrCodeSelfTest, "", err)
 	}
 	if !strings.Contains(res.Text(), "SnipGlyph") {
-		return fmt.Errorf("OneOCR 自检失败：识别结果为 %q", res.Text())
+		return &Error{Code: ErrCodeSelfTest, Detail: fmt.Sprintf("got %q", res.Text())}
 	}
 	return nil
 }

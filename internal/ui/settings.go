@@ -3,8 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,12 +14,12 @@ import (
 	"SnipGlyph/internal/cliphist"
 	"SnipGlyph/internal/config"
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/translate"
 )
 
 const (
-	settingsWidth  = 460 // DIP
-	defaultKeyHint = "点击输入框后按下新的组合键；Backspace 清除"
+	settingsWidth  = 520 // DIP
 	baiduSignupURL = "https://fanyi-api.baidu.com/manage/developer"
 )
 
@@ -46,17 +46,21 @@ type SettingsOptions struct {
 	OnClose func()
 }
 
-// hotkeyFields lists the hotkey settings in menu order.
-var hotkeyFields = []struct {
+type hotkeyField struct {
 	name  string
 	field func(*config.Hotkeys) *string
-}{
-	{"截图 OCR", func(h *config.Hotkeys) *string { return &h.ScreenshotOCR }},
-	{"静默 OCR", func(h *config.Hotkeys) *string { return &h.SilentOCR }},
-	{"截图翻译", func(h *config.Hotkeys) *string { return &h.ScreenshotTranslate }},
-	{"划词翻译", func(h *config.Hotkeys) *string { return &h.SelectionTranslate }},
-	{"输入翻译", func(h *config.Hotkeys) *string { return &h.InputTranslate }},
-	{"剪贴板历史", func(h *config.Hotkeys) *string { return &h.ClipboardHistory }},
+}
+
+// hotkeyFields lists the hotkey settings in menu order.
+func hotkeyFields(tr *i18n.Catalog) []hotkeyField {
+	return []hotkeyField{
+		{tr.ActionScreenshotOCR, func(h *config.Hotkeys) *string { return &h.ScreenshotOCR }},
+		{tr.ActionSilentOCR, func(h *config.Hotkeys) *string { return &h.SilentOCR }},
+		{tr.ActionScreenshotTranslate, func(h *config.Hotkeys) *string { return &h.ScreenshotTranslate }},
+		{tr.ActionSelectionTranslate, func(h *config.Hotkeys) *string { return &h.SelectionTranslate }},
+		{tr.ActionInputTranslate, func(h *config.Hotkeys) *string { return &h.InputTranslate }},
+		{tr.ActionClipboardHistory, func(h *config.Hotkeys) *string { return &h.ClipboardHistory }},
+	}
 }
 
 // Proxy choices, by index in the proxy drop-down.
@@ -71,9 +75,12 @@ type Settings struct {
 	opts SettingsOptions
 	mw   *walk.MainWindow
 
+	langCodes []i18n.Lang
+	lang      *walk.ComboBox
 	autostart *walk.CheckBox
 	history   *walk.CheckBox
 	clipboard *walk.CheckBox
+	fields    []hotkeyField
 	boxes     []*hotkeyBox
 	keyHint   *walk.TextLabel
 
@@ -96,7 +103,7 @@ type Settings struct {
 
 // NewSettings creates and shows the settings window. UI thread only.
 func NewSettings(opts SettingsOptions) (*Settings, error) {
-	mw, err := newWindow("SnipGlyph 设置", &walk.MainWindowCfg{DisableMaximize: true, DisableResizing: true})
+	mw, err := newWindow(i18n.Current().SettingsTitle, &walk.MainWindowCfg{DisableMaximize: true, DisableResizing: true})
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +152,7 @@ func (s *Settings) Activate() {
 func (s *Settings) gone() bool { return s.closing || s.mw.IsDisposed() }
 
 func (s *Settings) build() error {
+	tr := i18n.Current()
 	cfg := s.opts.Config
 	layout := walk.NewVBoxLayout()
 	layout.SetMargins(walk.Margins{HNear: 12, VNear: 10, HFar: 12, VFar: 10})
@@ -154,26 +162,44 @@ func (s *Settings) build() error {
 	}
 
 	// General.
-	_, general, err := titledCard(s.mw, "常规")
+	_, general, err := titledCard(s.mw, tr.SettingsGeneral)
 	if err != nil {
 		return err
 	}
-	if s.autostart, err = checkBox(general, "开机时自动启动", s.opts.Autostart); err != nil {
+	langRow, err := row(general)
+	if err != nil {
 		return err
 	}
-	if s.history, err = checkBox(general, "保存历史记录（只存文字，最近 "+strconv.Itoa(history.DefaultLimit)+" 条）", cfg.History.Enabled); err != nil {
+	if _, err := label(langRow, tr.SettingsLanguage, colorText, nil); err != nil {
+		return err
+	}
+	if s.lang, err = walk.NewDropDownBox(langRow); err != nil {
+		return err
+	}
+	s.langCodes = []i18n.Lang{i18n.Auto, i18n.ZhCN, i18n.En}
+	if err := s.lang.SetModel([]string{tr.LangAuto, tr.LangZhCN, tr.LangEn}); err != nil {
+		return err
+	}
+	s.lang.SetCurrentIndex(max(0, slices.Index(s.langCodes, i18n.Parse(cfg.Language))))
+	if _, err := walk.NewHSpacer(langRow); err != nil {
+		return err
+	}
+	if s.autostart, err = checkBox(general, tr.SettingsAutostart, s.opts.Autostart); err != nil {
+		return err
+	}
+	if s.history, err = checkBox(general, fmt.Sprintf(tr.SettingsSaveHistory, history.DefaultLimit), cfg.History.Enabled); err != nil {
 		return err
 	}
 	clipLimit := cfg.Clipboard.Limit
 	if clipLimit <= 0 {
 		clipLimit = cliphist.DefaultLimit
 	}
-	if s.clipboard, err = checkBox(general, "记录剪贴板历史（文字、图片、文件路径；最近 "+strconv.Itoa(clipLimit)+" 条，置顶不计）", cfg.Clipboard.Enabled); err != nil {
+	if s.clipboard, err = checkBox(general, fmt.Sprintf(tr.SettingsSaveClipboard, clipLimit), cfg.Clipboard.Enabled); err != nil {
 		return err
 	}
 
 	// Hotkeys.
-	_, keys, err := titledCard(s.mw, "快捷键")
+	_, keys, err := titledCard(s.mw, tr.SettingsHotkeys)
 	if err != nil {
 		return err
 	}
@@ -181,7 +207,8 @@ func (s *Settings) build() error {
 	if err != nil {
 		return err
 	}
-	for i, f := range hotkeyFields {
+	s.fields = hotkeyFields(tr)
+	for i, f := range s.fields {
 		l, err := label(g, f.name, colorText, nil)
 		if err != nil {
 			return err
@@ -196,16 +223,16 @@ func (s *Settings) build() error {
 		s.boxes = append(s.boxes, b)
 	}
 	gl.SetColumnStretchFactor(1, 1)
-	if s.keyHint, err = textLabel(keys, defaultKeyHint, colorMuted); err != nil {
+	if s.keyHint, err = textLabel(keys, tr.SettingsKeyHint, colorMuted); err != nil {
 		return err
 	}
 
 	// Translation.
-	_, tr, err := titledCard(s.mw, "翻译")
+	_, trCard, err := titledCard(s.mw, tr.SettingsTranslate)
 	if err != nil {
 		return err
 	}
-	if g, gl, err = grid(tr); err != nil {
+	if g, gl, err = grid(trCard); err != nil {
 		return err
 	}
 	cell := func(w walk.Widget, x, y, width int) {
@@ -219,7 +246,7 @@ func (s *Settings) build() error {
 		return err
 	}
 
-	if err := addLabel("目标语言", 0); err != nil {
+	if err := addLabel(tr.SettingsTargetLang, 0); err != nil {
 		return err
 	}
 	if s.target, err = walk.NewDropDownBox(g); err != nil {
@@ -239,7 +266,7 @@ func (s *Settings) build() error {
 	}
 	s.target.SetCurrentIndex(max(0, slices.Index(s.langs, cur)))
 	cell(s.target, 1, 0, 1)
-	note, err := label(g, "中文原文总是译成英文", colorMuted, nil)
+	note, err := label(g, tr.SettingsTargetNote, colorMuted, nil)
 	if err != nil {
 		return err
 	}
@@ -249,26 +276,26 @@ func (s *Settings) build() error {
 	if err != nil {
 		return err
 	}
-	if _, err := label(head, "百度翻译", colorMuted, titleFont()); err != nil {
+	if _, err := label(head, tr.BaiduName, colorMuted, titleFont()); err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(head); err != nil {
 		return err
 	}
-	if _, err := link(head, "申请密钥", func() { openURL(baiduSignupURL) }); err != nil {
+	if _, err := link(head, tr.BaiduApplyKey, func() { openURL(baiduSignupURL) }); err != nil {
 		return err
 	}
 	cell(head, 0, 1, 3)
 
 	b := cfg.Translate.Baidu
-	if err := addLabel("APP ID", 2); err != nil {
+	if err := addLabel(tr.BaiduAppID, 2); err != nil {
 		return err
 	}
 	if s.baiduID, err = lineEdit(g, b.AppID); err != nil {
 		return err
 	}
 	cell(s.baiduID, 1, 2, 2)
-	if err := addLabel("密钥", 3); err != nil {
+	if err := addLabel(tr.BaiduKey, 3); err != nil {
 		return err
 	}
 	if s.baiduKey, err = lineEdit(g, string(b.Key)); err != nil {
@@ -277,13 +304,13 @@ func (s *Settings) build() error {
 	s.baiduKey.SetPasswordMode(true)
 	cell(s.baiduKey, 1, 3, 2)
 
-	if err := addLabel("代理", 4); err != nil {
+	if err := addLabel(tr.SettingsProxy, 4); err != nil {
 		return err
 	}
 	if s.proxyMode, err = walk.NewDropDownBox(g); err != nil {
 		return err
 	}
-	if err := s.proxyMode.SetModel([]string{"跟随系统", "直连", "自定义"}); err != nil {
+	if err := s.proxyMode.SetModel([]string{tr.ProxySystem, tr.ProxyDirect, tr.ProxyCustom}); err != nil {
 		return err
 	}
 	cell(s.proxyMode, 1, 4, 1)
@@ -313,12 +340,12 @@ func (s *Settings) build() error {
 	if s.testBt, err = walk.NewPushButton(g); err != nil {
 		return err
 	}
-	s.testBt.SetText("测试")
+	s.testBt.SetText(tr.SettingsTest)
 	s.testBt.Clicked().Attach(s.testBaidu)
 	cell(s.testBt, 1, 5, 1)
 	gl.SetColumnStretchFactor(1, 1)
 	gl.SetColumnStretchFactor(2, 1)
-	if s.testMsg, err = textLabel(tr, "", colorMuted); err != nil {
+	if s.testMsg, err = textLabel(trCard, "", colorMuted); err != nil {
 		return err
 	}
 	setShown(s.testMsg, false)
@@ -338,7 +365,7 @@ func (s *Settings) build() error {
 	if s.saveBt, err = walk.NewPushButton(foot); err != nil {
 		return err
 	}
-	s.saveBt.SetText("保存")
+	s.saveBt.SetText(tr.SettingsSave)
 	s.saveBt.SetMinMaxSize(walk.Size{Width: 88}, walk.Size{})
 	s.saveBt.SendMessage(win.BM_SETSTYLE, win.BS_DEFPUSHBUTTON, 1)
 	s.saveBt.Clicked().Attach(s.save)
@@ -346,7 +373,7 @@ func (s *Settings) build() error {
 	if err != nil {
 		return err
 	}
-	cancel.SetText("取消")
+	cancel.SetText(tr.SettingsCancel)
 	cancel.SetMinMaxSize(walk.Size{Width: 88}, walk.Size{})
 	cancel.Clicked().Attach(func() { s.mw.Close() })
 	return nil
@@ -356,7 +383,7 @@ func (s *Settings) build() error {
 func (s *Settings) keyInput(reason string) {
 	if reason == "" {
 		s.keyHint.SetTextColor(colorMuted)
-		s.keyHint.SetText(defaultKeyHint)
+		s.keyHint.SetText(i18n.Current().SettingsKeyHint)
 		return
 	}
 	s.keyHint.SetTextColor(colorError)
@@ -384,11 +411,15 @@ func (s *Settings) focusChanged() {
 
 // collect reads the form into a copy of the config it was opened with.
 func (s *Settings) collect() (config.Config, error) {
+	tr := i18n.Current()
 	cfg := s.opts.Config // keeps settings the window does not show
 	if s.opts.Current != nil {
 		cfg = s.opts.Current()
 	}
-	for i, f := range hotkeyFields {
+	if i := s.lang.CurrentIndex(); i >= 0 && i < len(s.langCodes) {
+		cfg.Language = string(s.langCodes[i])
+	}
+	for i, f := range s.fields {
 		*f.field(&cfg.Hotkeys) = s.boxes[i].value
 	}
 	cfg.History.Enabled = s.history.Checked()
@@ -407,16 +438,17 @@ func (s *Settings) collect() (config.Config, error) {
 	default:
 		b.Proxy = strings.TrimSpace(s.proxyURL.Text())
 		if b.Proxy == "" {
-			return cfg, errors.New("请填写百度翻译的代理地址，或选择「跟随系统」")
+			return cfg, errors.New(tr.SettingsNeedProxy)
 		}
 	}
 	if (b.AppID == "") != (b.Key == "") {
-		return cfg, errors.New("百度翻译的 APP ID 和密钥要一起填写")
+		return cfg, errors.New(tr.SettingsNeedBothCreds)
 	}
 	return cfg, nil
 }
 
 func (s *Settings) save() {
+	tr := i18n.Current()
 	cfg, err := s.collect()
 	if err != nil {
 		s.setStatus(err.Error())
@@ -424,12 +456,12 @@ func (s *Settings) save() {
 	}
 	problems, err := s.opts.Save(cfg, s.autostart.Checked())
 	if err != nil {
-		s.setStatus("没有保存：" + err.Error())
+		s.setStatus(fmt.Sprintf(tr.SettingsNotSaved, err.Error()))
 		return
 	}
 	s.opts.Config = cfg
 	if len(problems) > 0 {
-		s.setStatus("已保存，但有问题：\n" + strings.Join(problems, "\n"))
+		s.setStatus(fmt.Sprintf(tr.SettingsSavedWithProblems, strings.Join(problems, "\n")))
 		return
 	}
 	s.mw.Close()
@@ -442,9 +474,10 @@ func (s *Settings) setStatus(msg string) {
 }
 
 func (s *Settings) testBaidu() {
+	tr := i18n.Current()
 	cfg, err := s.collect()
 	if err == nil && !cfg.Translate.Baidu.Configured() {
-		err = errors.New("请先填写 APP ID 和密钥")
+		err = errors.New(tr.SettingsNeedCredsFirst)
 	}
 	if err != nil {
 		s.setTestMsg(err.Error(), colorError)
@@ -456,7 +489,7 @@ func (s *Settings) testBaidu() {
 	ctx, cancel := context.WithTimeout(walk.App().Context(), 15*time.Second)
 	s.cancelTest = cancel
 	s.testBt.SetEnabled(false)
-	s.setTestMsg("正在测试…", colorMuted)
+	s.setTestMsg(tr.SettingsTesting, colorMuted)
 	go func() {
 		got, err := s.opts.TestBaidu(ctx, cfg.Translate.Baidu)
 		cancel()
@@ -464,12 +497,13 @@ func (s *Settings) testBaidu() {
 			if s.gone() {
 				return
 			}
+			cur := i18n.Current()
 			s.testBt.SetEnabled(true)
 			if err != nil {
-				s.setTestMsg("测试失败："+err.Error(), colorError)
+				s.setTestMsg(fmt.Sprintf(cur.SettingsTestFailed, err.Error()), colorError)
 				return
 			}
-			s.setTestMsg("可以使用：hello → "+got, colorText)
+			s.setTestMsg(fmt.Sprintf(cur.SettingsTestOK, got), colorText)
 		})
 	}()
 }

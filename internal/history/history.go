@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
+
+	"SnipGlyph/internal/i18n"
 )
 
 // FileName is the database inside the local app directory.
@@ -32,15 +34,16 @@ const (
 )
 
 func (k Kind) String() string {
+	tr := i18n.Current()
 	switch k {
 	case OCR:
-		return "截图 OCR"
+		return tr.ActionScreenshotOCR
 	case Screenshot:
-		return "截图翻译"
+		return tr.ActionScreenshotTranslate
 	case Selection:
-		return "划词翻译"
+		return tr.ActionSelectionTranslate
 	case Input:
-		return "输入翻译"
+		return tr.ActionInputTranslate
 	}
 	return string(k)
 }

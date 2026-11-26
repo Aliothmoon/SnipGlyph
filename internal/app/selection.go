@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/tailscale/walk"
 
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/textgrab"
 	"SnipGlyph/internal/toast"
 	"SnipGlyph/internal/ui"
@@ -31,7 +33,7 @@ func (a *App) selectionTranslate() {
 	ctx, cancel := context.WithTimeout(walk.App().Context(), grabTimeout)
 	defer cancel()
 	began := time.Now()
-	// The copy 划词 may send is not something to keep in clipboard history.
+	// The copy selection-grab may send is not something to keep in clipboard history.
 	a.clipPaused.Store(true)
 	text, method, err := textgrab.Selected(ctx)
 	if method == textgrab.ByCopy {
@@ -41,26 +43,27 @@ func (a *App) selectionTranslate() {
 	text = strings.TrimSpace(text)
 	slog.Info("selection grabbed", "method", method, "runes", len([]rune(text)),
 		"took", time.Since(began).Round(time.Millisecond), "err", err)
+	tr := i18n.Current()
 	switch {
 	case errors.Is(err, textgrab.ErrKeysHeld):
-		toast.Show("请先松开快捷键再取词", anchor)
+		toast.Show(tr.GrabReleaseKeys, anchor)
 		return
 	case errors.Is(err, textgrab.ErrNoSelection) || (err == nil && text == ""):
-		toast.Show("没有获取到选中的文字", anchor)
+		toast.Show(tr.GrabNoSelection, anchor)
 		return
 	case errors.Is(err, winclip.ErrBusy):
-		toast.Show("剪贴板正被其他程序占用，请稍后再试", anchor)
+		toast.Show(tr.GrabClipboardBusy, anchor)
 		return
 	case errors.Is(err, context.DeadlineExceeded):
-		toast.Show("取词超时，请再试一次", anchor)
+		toast.Show(tr.GrabTimeout, anchor)
 		return
 	case err != nil:
-		toast.Show("取词失败："+err.Error(), anchor)
+		toast.Show(fmt.Sprintf(tr.GrabFailed, err.Error()), anchor)
 		return
 	}
 
 	ui.Do(func() {
-		s, err := a.newSession("SnipGlyph · 划词翻译", anchor, history.Selection)
+		s, err := a.newSession("SnipGlyph · "+SelectionTranslate.String(), anchor, history.Selection)
 		if err != nil {
 			slog.Error("open popup", "err", err)
 			return

@@ -11,12 +11,12 @@ import (
 	"github.com/tailscale/win"
 	"golang.org/x/sys/windows"
 
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/winclip"
 )
 
 var procMonitorFromRect = windows.NewLazySystemDLL("user32.dll").NewProc("MonitorFromRect")
 
-const defaultHint = "Ctrl+Enter 翻译 · Esc 关闭"
 
 // PopupOptions configures a result popup.
 type PopupOptions struct {
@@ -125,6 +125,7 @@ func NewPopup(opts PopupOptions) (*Popup, error) {
 }
 
 func (p *Popup) build() error {
+	tr := i18n.Current()
 	mw := p.mw
 	outer := walk.NewVBoxLayout()
 	outer.SetMargins(walk.Margins{})
@@ -147,10 +148,10 @@ func (p *Popup) build() error {
 	if _, err := walk.NewHSpacer(bar); err != nil {
 		return err
 	}
-	if p.pin, err = newIconButton(bar, glyphPin, "钉住：点别处不关闭", false, func() { p.setPinned(!p.pinned) }); err != nil {
+	if p.pin, err = newIconButton(bar, glyphPin, tr.PopupPinTip, false, func() { p.setPinned(!p.pinned) }); err != nil {
 		return err
 	}
-	if _, err := newIconButton(bar, glyphClose, "关闭（Esc）", true, func() { p.mw.Close() }); err != nil {
+	if _, err := newIconButton(bar, glyphClose, tr.PopupCloseTip, true, func() { p.mw.Close() }); err != nil {
 		return err
 	}
 	dragBy(mw, bar)
@@ -176,13 +177,13 @@ func (p *Popup) build() error {
 	if err != nil {
 		return err
 	}
-	if _, err := label(head, "原文", colorMuted, titleFont()); err != nil {
+	if _, err := label(head, tr.PopupSource, colorMuted, titleFont()); err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(head); err != nil {
 		return err
 	}
-	if p.copySrc, err = link(head, "复制", func() { p.copyText(p.copySrc, p.source) }); err != nil {
+	if p.copySrc, err = link(head, tr.PopupCopy, func() { p.copyText(p.copySrc, p.source) }); err != nil {
 		return err
 	}
 	if p.source, err = textBox(src); err != nil {
@@ -195,21 +196,21 @@ func (p *Popup) build() error {
 			return
 		}
 		has := p.source.TextLength() > 0
-		setLinkText(p.copySrc, "复制", true)
+		setLinkText(p.copySrc, i18n.Current().PopupCopy, true)
 		p.copySrc.SetEnabled(has)
 		p.translBt.SetEnabled(has && len(p.opts.Engines) > 0)
 		p.refitAnchored(keepTop)
 	})
 
 	// Translation card.
-	var tr *walk.Composite
-	if p.trCard, tr, err = card(body); err != nil {
+	var trCardInner *walk.Composite
+	if p.trCard, trCardInner, err = card(body); err != nil {
 		return err
 	}
-	if head, err = row(tr); err != nil {
+	if head, err = row(trCardInner); err != nil {
 		return err
 	}
-	if p.dir, err = label(head, "译文", colorMuted, titleFont()); err != nil {
+	if p.dir, err = label(head, tr.PopupResult, colorMuted, titleFont()); err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(head); err != nil {
@@ -226,16 +227,16 @@ func (p *Popup) build() error {
 	} else {
 		setShown(p.engine, false) // the pane explains how to add one
 	}
-	p.engine.SetToolTipText("翻译引擎")
+	p.engine.SetToolTipText(tr.PopupEngineTip)
 	p.engine.CurrentIndexChanged().Attach(func() {
 		if p.expanded && p.Source() != "" {
 			p.requestTranslation()
 		}
 	})
-	if p.copyRes, err = link(head, "复制", func() { p.copyText(p.copyRes, p.result) }); err != nil {
+	if p.copyRes, err = link(head, tr.PopupCopy, func() { p.copyText(p.copyRes, p.result) }); err != nil {
 		return err
 	}
-	if p.result, err = textBox(tr); err != nil {
+	if p.result, err = textBox(trCardInner); err != nil {
 		return err
 	}
 	p.result.SetReadOnly(true)
@@ -249,7 +250,7 @@ func (p *Popup) build() error {
 	if err != nil {
 		return err
 	}
-	if p.hint, err = label(foot, defaultHint, colorMuted, nil); err != nil {
+	if p.hint, err = label(foot, tr.PopupHint, colorMuted, nil); err != nil {
 		return err
 	}
 	if _, err := walk.NewHSpacer(foot); err != nil {
@@ -258,7 +259,7 @@ func (p *Popup) build() error {
 	if p.translBt, err = walk.NewPushButton(foot); err != nil {
 		return err
 	}
-	p.translBt.SetText("翻译")
+	p.translBt.SetText(tr.PopupTranslate)
 	p.translBt.SetMinMaxSize(walk.Size{Width: 88}, walk.Size{})
 	p.translBt.Clicked().Attach(p.requestTranslation)
 	// The accent ring of a default button marks the main action.
@@ -273,13 +274,14 @@ func (p *Popup) build() error {
 
 // setPinned keeps the popup open when it loses focus, or lets it close.
 func (p *Popup) setPinned(on bool) {
+	tr := i18n.Current()
 	p.pinned = on
 	if on {
 		p.pin.setGlyph(glyphPinned, true)
-		p.pin.cw.SetToolTipText("取消钉住")
+		p.pin.cw.SetToolTipText(tr.PopupUnpinTip)
 	} else {
 		p.pin.setGlyph(glyphPin, false)
-		p.pin.cw.SetToolTipText("钉住：点别处不关闭")
+		p.pin.cw.SetToolTipText(tr.PopupPinTip)
 	}
 }
 
@@ -340,12 +342,13 @@ func copyToClipboard(ll *walk.LinkLabel, text string) {
 			if ll.IsDisposed() {
 				return
 			}
+			tr := i18n.Current()
 			if err != nil {
 				slog.Warn("copy to clipboard", "err", err)
-				setLinkText(ll, "复制失败，重试", true)
+				setLinkText(ll, tr.PopupCopyRetry, true)
 				return
 			}
-			setLinkText(ll, "已复制", false)
+			setLinkText(ll, tr.PopupCopied, false)
 		})
 	}()
 }
@@ -385,7 +388,7 @@ func (p *Popup) SetSource(text string) {
 	p.settingText = true
 	p.source.SetText(crlf(text))
 	p.settingText = false
-	setLinkText(p.copySrc, "复制", true)
+	setLinkText(p.copySrc, i18n.Current().PopupCopy, true)
 	p.copySrc.SetEnabled(text != "")
 	p.translBt.SetEnabled(text != "" && len(p.opts.Engines) > 0)
 	p.refit()
@@ -429,7 +432,7 @@ func (p *Popup) ShowTranslating(direction string) {
 	p.expand()
 	p.dir.SetText(direction)
 	p.result.SetTextColor(colorMuted)
-	p.result.SetText("翻译中…")
+	p.result.SetText(i18n.Current().PopupTranslating)
 	p.copyRes.SetEnabled(false)
 	p.refit()
 }
@@ -445,7 +448,7 @@ func (p *Popup) SetTranslation(direction, text string) {
 	}
 	p.result.SetTextColor(colorText)
 	p.result.SetText(crlf(text))
-	setLinkText(p.copyRes, "复制", true)
+	setLinkText(p.copyRes, i18n.Current().PopupCopy, true)
 	p.copyRes.SetEnabled(text != "")
 	p.refit()
 }

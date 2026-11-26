@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"log/slog"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/tailscale/walk"
 
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 	"SnipGlyph/internal/netx"
 	"SnipGlyph/internal/ocr"
 	"SnipGlyph/internal/translate"
@@ -20,9 +22,6 @@ import (
 )
 
 const translateTimeout = 60 * time.Second
-
-const noEngineMsg = "还没有配置翻译引擎。\n" +
-	"请在托盘菜单的「设置」里填写百度翻译的 APP ID 和密钥。"
 
 // session is one popup and its translation requests. UI thread only.
 type session struct {
@@ -43,7 +42,7 @@ func (a *App) buildEngines() []string {
 	if t.Baidu.Configured() {
 		hc, err := netx.Client(t.Baidu.Proxy)
 		if err != nil {
-			problems = append(problems, "百度翻译的代理设置有误："+err.Error())
+			problems = append(problems, fmt.Sprintf(i18n.Current().BaiduProxyBad, err.Error()))
 		} else {
 			a.engines = append(a.engines, &translate.Baidu{AppID: t.Baidu.AppID, Key: string(t.Baidu.Key), HTTP: hc})
 			a.engineIDs = append(a.engineIDs, "baidu")
@@ -93,7 +92,7 @@ func (a *App) translate(s *session, text string, engine int) {
 		return
 	}
 	if len(a.engines) == 0 {
-		s.popup.SetTranslationError(noEngineMsg)
+		s.popup.SetTranslationError(i18n.Current().NoTranslateEngine)
 		return
 	}
 	if engine < 0 || engine >= len(a.engines) {
@@ -134,11 +133,12 @@ func (a *App) translate(s *session, text string, engine int) {
 			if s.seq != seq {
 				return // superseded, or the popup closed
 			}
+			tr := i18n.Current()
 			switch {
 			case errors.Is(err, context.DeadlineExceeded):
-				s.popup.SetTranslationError("翻译超时，请检查网络或代理设置")
+				s.popup.SetTranslationError(tr.TranslateTimeout)
 			case err != nil:
-				s.popup.SetTranslationError("翻译失败：" + err.Error())
+				s.popup.SetTranslationError(fmt.Sprintf(tr.TranslateFailed, err.Error()))
 			default:
 				if res.From != "" && res.From != translate.Auto {
 					from = res.From
@@ -151,7 +151,7 @@ func (a *App) translate(s *session, text string, engine int) {
 }
 
 func direction(from, to translate.Lang) string {
-	src := "自动检测"
+	src := i18n.Current().AutoDetect
 	if from != "" && from != translate.Auto {
 		src = from.Name()
 	}
@@ -164,10 +164,11 @@ func direction(from, to translate.Lang) string {
 func (a *App) inputTranslate() {
 	anchor := cursorAnchor()
 	ui.Do(func() {
-		s, err := a.newSession("SnipGlyph · 输入翻译", anchor, history.Input)
+		tr := i18n.Current()
+		s, err := a.newSession("SnipGlyph · "+InputTranslate.String(), anchor, history.Input)
 		if err != nil {
 			slog.Error("open popup", "err", err)
-			a.tray.Warn("输入翻译", "无法打开窗口："+err.Error())
+			a.tray.Warn(InputTranslate.String(), fmt.Sprintf(tr.OpenWindowFailed, err.Error()))
 			return
 		}
 		clip, err := walk.Clipboard().Text()
@@ -179,11 +180,11 @@ func (a *App) inputTranslate() {
 		s.popup.SelectSource()
 		switch {
 		case len(a.engines) == 0:
-			s.popup.SetTranslationError(noEngineMsg)
+			s.popup.SetTranslationError(tr.NoTranslateEngine)
 		case clip != "":
-			s.popup.SetHint("已填入剪贴板内容，按 Ctrl+Enter 翻译")
+			s.popup.SetHint(tr.InputHintPrefilled)
 		default:
-			s.popup.SetHint("输入或粘贴文字，按 Ctrl+Enter 翻译")
+			s.popup.SetHint(tr.InputHintEmpty)
 		}
 	})
 }

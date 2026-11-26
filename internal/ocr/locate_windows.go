@@ -13,34 +13,119 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const packageFamily = "Microsoft.ScreenSketch_8wekyb3d8bbwe"
+const (
+	packageFamily = "Microsoft.ScreenSketch_8wekyb3d8bbwe"
+	// EnvDir overrides the OneOCR directory when set.
+	EnvDir = "SNIPGLYPH_ONEOCR_DIR"
+)
 
 var (
 	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
 	procGetPackagesByFamily      = kernel32.NewProc("GetPackagesByPackageFamily")
 	procGetPackagePathByFullName = kernel32.NewProc("GetPackagePathByFullName")
 	procWideCharToMultiByte      = kernel32.NewProc("WideCharToMultiByte")
+	procGetShortPathNameW        = kernel32.NewProc("GetShortPathNameW")
 )
 
-// Files OneOCR needs, all in the Snipping Tool's SnippingTool folder.
+// Files OneOCR needs.
 const (
 	dllName   = "oneocr.dll"
 	ortName   = "onnxruntime.dll"
 	modelName = "oneocr.onemodel"
 )
 
-// ErrNotInstalled means no usable Snipping Tool was found.
-var ErrNotInstalled = errors.New("找不到 Windows 截图工具，请从 Microsoft Store 安装或更新「截图工具」")
+// Source describes where OneOCR files were located.
+type Source string
 
-// Install is a Snipping Tool installation that contains OneOCR.
-type Install struct {
-	Version string // package version, e.g. "11.2608.41.0"
-	Dir     string // folder holding the DLLs and the model
+const (
+	SourceCustom       Source = "custom"
+	SourceLocal        Source = "local"
+	SourceSnippingTool Source = "snipping_tool"
+)
+
+// LocateOptions controls where LocateWith looks for OneOCR files.
+type LocateOptions struct {
+	// ExeDir is the directory holding the SnipGlyph executable. When empty,
+	// os.Executable is queried.
+	ExeDir string
+	// CustomDir is an explicit user-configured directory (e.g. config.OCR.Dir).
+	// Relative paths resolve against ExeDir. When empty, SNIPGLYPH_ONEOCR_DIR
+	// is checked.
+	CustomDir string
+	// SkipSnippingTool disables the MSIX Snipping Tool fallback (for tests).
+	SkipSnippingTool bool
 }
 
-// Locate finds the newest installed Snipping Tool that ships OneOCR. It only
-// queries the package manager and stats files, so it is cheap.
+// Install is a usable OneOCR file set.
+type Install struct {
+	Source     Source
+	Version    string // MSIX version, e.g. "11.2608.41.0", or "local"/"custom"
+	Dir        string // folder holding the DLLs and the model
+	NeedsStage bool   // true for MSIX packages whose ACL blocks direct LoadLibrary
+}
+
+// Locate finds OneOCR files using default options: custom env dir, local
+// folders beside the executable, and finally the installed Snipping Tool.
 func Locate() (Install, error) {
+	return LocateWith(LocateOptions{})
+}
+
+// LocateWith finds OneOCR files in priority order:
+//  1. CustomDir (or SNIPGLYPH_ONEOCR_DIR) — returns an explicit error if files are missing
+//  2. <ExeDir>\oneocr\
+//  3. <ExeDir>\
+//  4. Installed Windows Snipping Tool (MSIX)
+func LocateWith(opts LocateOptions) (Install, error) {
+	exeDir := opts.ExeDir
+	if exeDir == "" {
+		if exe, err := os.Executable(); err == nil {
+			exeDir = filepath.Dir(exe)
+		}
+	}
+
+	customDir := strings.TrimSpace(opts.CustomDir)
+	if customDir == "" {
+		customDir = strings.TrimSpace(os.Getenv(EnvDir))
+	}
+	if customDir != "" {
+		if !filepath.IsAbs(customDir) && exeDir != "" {
+			customDir = filepath.Join(exeDir, customDir)
+		}
+		if missing := missingFiles(customDir, dllName, ortName, modelName); len(missing) > 0 {
+			return Install{}, &Error{
+				Code:   ErrCodeCustomDirMissing,
+				Arg:    customDir,
+				Detail: strings.Join(missing, ", "),
+			}
+		}
+		return Install{
+			Source:     SourceCustom,
+			Version:    "custom",
+			Dir:        customDir,
+			NeedsStage: false,
+		}, nil
+	}
+
+	if exeDir != "" {
+		for _, dir := range []string{filepath.Join(exeDir, "oneocr"), exeDir} {
+			if len(missingFiles(dir, dllName, ortName, modelName)) == 0 {
+				return Install{
+					Source:     SourceLocal,
+					Version:    "local",
+					Dir:        dir,
+					NeedsStage: false,
+				}, nil
+			}
+		}
+	}
+
+	if opts.SkipSnippingTool {
+		return Install{}, ErrNotInstalled
+	}
+	return locateSnippingTool()
+}
+
+func locateSnippingTool() (Install, error) {
 	names, err := packageFullNames(packageFamily)
 	if err != nil {
 		return Install{}, err
@@ -61,7 +146,12 @@ func Locate() (Install, error) {
 			continue
 		}
 		if best.Dir == "" || versionLess(best.Version, parts[1]) {
-			best = Install{Version: parts[1], Dir: dir}
+			best = Install{
+				Source:     SourceSnippingTool,
+				Version:    parts[1],
+				Dir:        dir,
+				NeedsStage: true,
+			}
 		}
 	}
 	if best.Dir == "" {
@@ -71,6 +161,9 @@ func Locate() (Install, error) {
 }
 
 func packageFullNames(family string) ([]string, error) {
+	if err := procGetPackagesByFamily.Find(); err != nil {
+		return nil, ErrNotInstalled
+	}
 	fam, err := windows.UTF16PtrFromString(family)
 	if err != nil {
 		return nil, err
@@ -78,7 +171,8 @@ func packageFullNames(family string) ([]string, error) {
 	var count, bufLen uint32
 	r, _, _ := procGetPackagesByFamily.Call(uintptr(unsafe.Pointer(fam)),
 		uintptr(unsafe.Pointer(&count)), 0, uintptr(unsafe.Pointer(&bufLen)), 0)
-	if count == 0 {
+	const appModelNoPackage = 15700
+	if count == 0 || r == appModelNoPackage {
 		return nil, ErrNotInstalled
 	}
 	if r != uintptr(windows.ERROR_INSUFFICIENT_BUFFER) && r != 0 {
@@ -119,12 +213,18 @@ func packagePath(fullName string) (string, error) {
 }
 
 func allExist(dir string, names ...string) bool {
+	return len(missingFiles(dir, names...)) == 0
+}
+
+func missingFiles(dir string, names ...string) []string {
+	var missing []string
 	for _, n := range names {
-		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
-			return false
+		fi, err := os.Stat(filepath.Join(dir, n))
+		if err != nil || fi.IsDir() {
+			missing = append(missing, n)
 		}
 	}
-	return true
+	return missing
 }
 
 // versionLess compares dotted numeric versions.
@@ -145,19 +245,41 @@ func versionLess(a, b string) bool {
 	return false
 }
 
-// stage copies the two DLLs into cacheDir\<version>\ and returns that folder.
-// The package folder grants execute rights only to the Snipping Tool itself,
-// so the DLLs cannot be loaded in place. The model is only read, so it stays.
-// A copy is reused when the file sizes still match.
+// stageKey names the staging subfolder under cacheDir. MSIX installs use
+// their package version; fallback staging of local files keys on file sizes
+// and modification times so replacing a DLL invalidates the copy.
+func stageKey(inst Install) string {
+	if inst.Source == SourceSnippingTool && inst.Version != "" {
+		return inst.Version
+	}
+	base := inst.Version
+	if base == "" {
+		base = "local"
+	}
+	var parts []string
+	parts = append(parts, base)
+	for _, n := range []string{dllName, ortName} {
+		if fi, err := os.Stat(filepath.Join(inst.Dir, n)); err == nil {
+			parts = append(parts, fmt.Sprintf("%d_%d", fi.Size(), fi.ModTime().Unix()))
+		}
+	}
+	return strings.Join(parts, "-")
+}
+
+// stage copies the two DLLs into cacheDir\<key>\ and returns that folder.
+// The MSIX package folder grants execute rights only to the Snipping Tool
+// itself, so the DLLs cannot be loaded in place. The model is only read, so
+// it stays. A copy is reused when the file sizes still match.
 func stage(inst Install, cacheDir string) (string, error) {
-	dst := filepath.Join(cacheDir, inst.Version)
+	key := stageKey(inst)
+	dst := filepath.Join(cacheDir, key)
 	if sameSizes(inst.Dir, dst, dllName, ortName) {
 		return dst, nil
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
 	}
-	tmp, err := os.MkdirTemp(cacheDir, inst.Version+".tmp-")
+	tmp, err := os.MkdirTemp(cacheDir, key+".tmp-")
 	if err != nil {
 		return "", err
 	}
@@ -219,28 +341,62 @@ func copyFile(src, dst string) error {
 }
 
 // ansiPath converts path to the system ANSI code page, which is how
-// CreateOcrPipeline interprets the model path.
+// CreateOcrPipeline interprets the model path. If path contains characters
+// outside the active code page, it retries with the Windows 8.3 short path.
 func ansiPath(path string) ([]byte, error) {
+	buf, unrepresentable, err := wideToANSI(path)
+	if err == nil {
+		return buf, nil
+	}
+	if unrepresentable {
+		if short, serr := shortPath(path); serr == nil && short != "" && short != path {
+			if buf2, _, err2 := wideToANSI(short); err2 == nil {
+				return buf2, nil
+			}
+		}
+		return nil, &Error{Code: ErrCodeModelPathEncoding, Arg: path}
+	}
+	return nil, err
+}
+
+func wideToANSI(path string) (buf []byte, unrepresentable bool, err error) {
 	w, err := windows.UTF16FromString(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	const cpACP, wcNoBestFitChars = 0, 0x400
-	n, _, err := procWideCharToMultiByte.Call(cpACP, wcNoBestFitChars,
+	n, _, callErr := procWideCharToMultiByte.Call(cpACP, wcNoBestFitChars,
 		uintptr(unsafe.Pointer(&w[0])), uintptr(len(w)), 0, 0, 0, 0)
 	if n == 0 {
-		return nil, fmt.Errorf("WideCharToMultiByte: %w", err)
+		return nil, false, fmt.Errorf("WideCharToMultiByte: %w", callErr)
 	}
-	buf := make([]byte, n)
+	buf = make([]byte, n)
 	var usedDefault int32
-	n, _, err = procWideCharToMultiByte.Call(cpACP, wcNoBestFitChars,
+	n, _, callErr = procWideCharToMultiByte.Call(cpACP, wcNoBestFitChars,
 		uintptr(unsafe.Pointer(&w[0])), uintptr(len(w)),
 		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0, uintptr(unsafe.Pointer(&usedDefault)))
 	if n == 0 {
-		return nil, fmt.Errorf("WideCharToMultiByte: %w", err)
+		return nil, false, fmt.Errorf("WideCharToMultiByte: %w", callErr)
 	}
 	if usedDefault != 0 {
-		return nil, fmt.Errorf("path %q is not representable in the ANSI code page", path)
+		return nil, true, errors.New("not representable in ANSI code page")
 	}
-	return buf, nil // NUL-terminated: w included the terminator
+	return buf, false, nil // NUL-terminated: w included the terminator
+}
+
+func shortPath(path string) (string, error) {
+	w, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	n, _, callErr := procGetShortPathNameW.Call(uintptr(unsafe.Pointer(w)), 0, 0)
+	if n == 0 {
+		return "", callErr
+	}
+	buf := make([]uint16, n)
+	r, _, callErr := procGetShortPathNameW.Call(uintptr(unsafe.Pointer(w)), uintptr(unsafe.Pointer(&buf[0])), n)
+	if r == 0 || r >= n {
+		return "", callErr
+	}
+	return windows.UTF16ToString(buf[:r]), nil
 }

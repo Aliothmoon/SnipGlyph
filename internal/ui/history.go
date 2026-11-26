@@ -13,6 +13,7 @@ import (
 	"github.com/tailscale/win"
 
 	"SnipGlyph/internal/history"
+	"SnipGlyph/internal/i18n"
 )
 
 const (
@@ -62,7 +63,7 @@ type HistoryWindow struct {
 
 // NewHistoryWindow creates and shows the window. UI thread only.
 func NewHistoryWindow(opts HistoryOptions) (*HistoryWindow, error) {
-	mw, err := newWindow("SnipGlyph 历史记录", &walk.MainWindowCfg{})
+	mw, err := newWindow(i18n.Current().HistoryTitle, &walk.MainWindowCfg{})
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +108,13 @@ func (h *HistoryWindow) Activate() {
 	}
 }
 
+// Close closes the history window.
+func (h *HistoryWindow) Close() {
+	if !h.gone() {
+		h.mw.Close()
+	}
+}
+
 // SetRecording updates the note on whether new results are saved.
 func (h *HistoryWindow) SetRecording(on bool) {
 	if h.gone() {
@@ -119,6 +127,7 @@ func (h *HistoryWindow) SetRecording(on bool) {
 func (h *HistoryWindow) gone() bool { return h.closing || h.mw.IsDisposed() }
 
 func (h *HistoryWindow) build() error {
+	tr := i18n.Current()
 	mw := h.mw
 	layout := walk.NewVBoxLayout()
 	layout.SetMargins(walk.Margins{HNear: 12, VNear: 10, HFar: 12, VFar: 10})
@@ -134,12 +143,12 @@ func (h *HistoryWindow) build() error {
 	if h.search, err = walk.NewLineEdit(top); err != nil {
 		return err
 	}
-	setCueBanner(h.search, "搜索原文或译文，空格分隔多个关键字（Ctrl+F）")
+	setCueBanner(h.search, tr.HistorySearchCue)
 	h.search.TextChanged().Attach(h.searchSoon)
 	if h.clearBt, err = walk.NewPushButton(top); err != nil {
 		return err
 	}
-	h.clearBt.SetText("清空全部…")
+	h.clearBt.SetText(tr.HistoryClearAll)
 	h.clearBt.Clicked().Attach(h.clearAll)
 
 	if h.table, err = walk.NewTableView(mw); err != nil {
@@ -148,7 +157,7 @@ func (h *HistoryWindow) build() error {
 	for _, c := range []struct {
 		title string
 		width int
-	}{{"时间", 96}, {"类型", 72}, {"原文", 300}, {"译文", 240}} {
+	}{{tr.HistoryColTime, 96}, {tr.HistoryColKind, 124}, {tr.HistoryColSource, 260}, {tr.HistoryColResult, 228}} {
 		col := walk.NewTableViewColumn()
 		col.SetTitle(c.title)
 		col.SetWidth(c.width)
@@ -169,10 +178,10 @@ func (h *HistoryWindow) build() error {
 		return err
 	}
 	detail.Layout().SetSpacing(10)
-	if h.copySrc, h.source, err = detailCard(detail, "原文"); err != nil {
+	if h.copySrc, h.source, err = detailCard(detail, tr.HistoryColSource); err != nil {
 		return err
 	}
-	if h.copyRes, h.result, err = detailCard(detail, "译文"); err != nil {
+	if h.copyRes, h.result, err = detailCard(detail, tr.HistoryColResult); err != nil {
 		return err
 	}
 	layout.SetStretchFactor(h.table, 3)
@@ -194,13 +203,13 @@ func (h *HistoryWindow) build() error {
 	if h.delBt, err = walk.NewPushButton(foot); err != nil {
 		return err
 	}
-	h.delBt.SetText("删除")
+	h.delBt.SetText(tr.HistoryDelete)
 	h.delBt.Clicked().Attach(h.deleteCurrent)
 	if h.openBt, err = walk.NewPushButton(foot); err != nil {
 		return err
 	}
-	h.openBt.SetText("在弹窗中打开")
-	h.openBt.SetToolTipText("可以修改原文、重新翻译（双击或 Enter）")
+	h.openBt.SetText(tr.HistoryOpenPopup)
+	h.openBt.SetToolTipText(tr.HistoryOpenPopupTip)
 	h.openBt.Clicked().Attach(h.openCurrent)
 
 	h.copySrc.LinkActivated().Attach(func(*walk.LinkLabelLink) { h.copy(h.copySrc, func(e history.Entry) string { return e.Source }) })
@@ -266,10 +275,11 @@ func (h *HistoryWindow) searchSoon() {
 }
 
 func (h *HistoryWindow) showEntries(entries []history.Entry, total int, query string, err error) {
+	tr := i18n.Current()
 	if err != nil {
 		slog.Warn("search history", "err", err)
 		h.count.SetTextColor(colorError)
-		h.count.SetText("读取历史记录失败：" + err.Error())
+		h.count.SetText(fmt.Sprintf(tr.HistoryReadFailed, err.Error()))
 		return
 	}
 	// Keep the selected entry selected, or select the newest.
@@ -296,16 +306,16 @@ func (h *HistoryWindow) showEntries(entries []history.Entry, total int, query st
 	var msg string
 	switch {
 	case strings.TrimSpace(query) != "" && len(entries) >= historyShown:
-		msg = fmt.Sprintf("找到很多条，只列出最近 %d 条", historyShown)
+		msg = fmt.Sprintf(tr.HistoryFoundMany, historyShown)
 	case strings.TrimSpace(query) != "":
-		msg = fmt.Sprintf("找到 %d 条", len(entries))
+		msg = fmt.Sprintf(tr.HistoryFoundCount, len(entries))
 	case len(entries) < total:
-		msg = fmt.Sprintf("共 %d 条，列出最近 %d 条", total, len(entries))
+		msg = fmt.Sprintf(tr.HistoryTotalPartial, total, len(entries))
 	default:
-		msg = fmt.Sprintf("共 %d 条", total)
+		msg = fmt.Sprintf(tr.HistoryTotalCount, total)
 	}
 	if !h.opts.Recording {
-		msg += " · 已暂停记录，可在设置中开启"
+		msg += tr.HistoryPausedNote
 	}
 	h.count.SetTextColor(colorMuted)
 	h.count.SetText(msg)
@@ -321,13 +331,14 @@ func (h *HistoryWindow) current() (history.Entry, bool) {
 }
 
 func (h *HistoryWindow) showCurrent() {
+	tr := i18n.Current()
 	e, ok := h.current()
 	h.delBt.SetEnabled(ok)
 	h.openBt.SetEnabled(ok)
 	h.copySrc.SetEnabled(ok)
 	h.copyRes.SetEnabled(ok && e.Translation != "")
-	setLinkText(h.copySrc, "复制", ok)
-	setLinkText(h.copyRes, "复制", ok && e.Translation != "")
+	setLinkText(h.copySrc, tr.PopupCopy, ok)
+	setLinkText(h.copyRes, tr.PopupCopy, ok && e.Translation != "")
 	if !ok {
 		h.info.SetText("")
 		h.source.SetText("")
@@ -342,7 +353,7 @@ func (h *HistoryWindow) showCurrent() {
 	h.source.SetText(crlf(e.Source))
 	if e.Translation == "" {
 		h.result.SetTextColor(colorMuted)
-		h.result.SetText("（没有翻译）")
+		h.result.SetText(tr.HistoryNoTranslation)
 	} else {
 		h.result.SetTextColor(colorText)
 		h.result.SetText(crlf(e.Translation))
@@ -394,7 +405,8 @@ func (h *HistoryWindow) deleteCurrent() {
 }
 
 func (h *HistoryWindow) clearAll() {
-	if walk.MsgBox(h.mw, "清空历史记录", "删除全部历史记录？删除后无法恢复。",
+	tr := i18n.Current()
+	if walk.MsgBox(h.mw, tr.HistoryClearTitle, tr.HistoryClearConfirm,
 		walk.MsgBoxYesNo|walk.MsgBoxIconWarning|walk.MsgBoxDefButton2) != walk.DlgCmdYes {
 		return
 	}
@@ -413,7 +425,8 @@ func (h *HistoryWindow) background(change func(ctx context.Context) error) {
 			}
 			if err != nil {
 				slog.Warn("change history", "err", err)
-				walk.MsgBox(h.mw, "历史记录", "操作失败："+err.Error(), walk.MsgBoxIconError)
+				tr := i18n.Current()
+				walk.MsgBox(h.mw, tr.TrayHistory, fmt.Sprintf(tr.OpFailed, err.Error()), walk.MsgBoxIconError)
 			}
 			h.Refresh()
 		})
