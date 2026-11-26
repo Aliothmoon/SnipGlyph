@@ -1,113 +1,132 @@
+<div align="center">
+
+<img src="winres/icon.png" width="76" alt="SnipGlyph" />
+
 # SnipGlyph
 
-[English](#english) | [中文](#中文)
+**A lightweight, pure-Go Windows tray utility for offline OCR, translation, and clipboard history.**
+
+[![Release](https://img.shields.io/github/v/release/Aliothmoon/SnipGlyph?style=flat-square&color=2563eb)](https://github.com/Aliothmoon/SnipGlyph/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4?style=flat-square)](https://github.com/Aliothmoon/SnipGlyph/releases/latest)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00add8?style=flat-square)](go.mod)
+
+**English** · [简体中文](README.zh-CN.md)
+
+</div>
 
 ---
 
-## English
+## Highlights
 
-A lightweight, pure-Go Windows tray utility for offline **OCR**, **translation**, and **clipboard history**.
+- **Single binary, zero runtime bloat** — Pure Go (`CGO_ENABLED=0`), native Win32/Walk UI, stays quiet in the system tray.
+- **Offline OneOCR in an isolated worker** — Runs OCR in a child process that unloads after 10 minutes idle, keeping tray memory tiny and crashes isolated.
+- **Instant clipboard history** — SQLite-backed with full-text search, custom tabs, pinning, inline editing, images, and file paths; ignores private entries from password managers.
+- **Bilingual & portable** — Automatically follows your Windows UI language (`English` / `简体中文`) with live switching in Settings, and supports full portable mode.
 
-### Features
+## Features & Default Hotkeys
 
-| Feature | Default Hotkey |
-|---|---|
-| Screenshot OCR | `Win+Alt+Shift+C` |
-| Silent OCR (copy directly to clipboard) | `Win+Alt+C` |
-| Screenshot Translate | `Win+Alt+S` |
-| Selection Translate | `Win+Alt+X` |
-| Input Translate | `Win+Alt+I` |
-| Clipboard History | `Alt+V` |
+| Feature | Description | Default Hotkey |
+|---|---|---|
+| **Screenshot OCR** | Capture a region or window, edit text, copy, or translate | `Win+Alt+Shift+C` |
+| **Silent OCR** | Recognize text and copy directly to clipboard with a lightweight toast | `Win+Alt+C` |
+| **Screenshot Translate** | Capture a region and translate immediately | `Win+Alt+S` |
+| **Selection Translate** | Translate selected text in the active app (UI Automation first, Ctrl+C fallback) | `Win+Alt+X` |
+| **Input Translate** | Open a quick popup prefilled with clipboard text | `Win+Alt+I` |
+| **Clipboard History** | Searchable, tabbed panel for text, rich text, images, and files | `Alt+V` |
 
-- **UI Language**: Follows your Windows UI language automatically (`zh-CN` / `English`), and can be switched live in **Settings → General → Language**.
-- **Offline OCR**: Powered by Microsoft OneOCR (from local files or Windows 11 Snipping Tool).
-- **Translation**: Supports Baidu Translate with history search, settings UI, and optional Windows startup.
+All hotkeys, UI language, Baidu Translate credentials, proxy settings (System / Direct / Custom HTTP or SOCKS5), history switches, and Windows startup can be configured in **Tray → Settings** and take effect immediately without restarting.
 
-### Usage
+## Quick Start
 
-Download `snipglyph.exe` from [Releases](https://github.com/Aliothmoon/SnipGlyph/releases) and run it. It lives in the system tray; configure hotkeys, language, and translation keys via **Tray → Settings**.
+1. Download the latest release from [GitHub Releases](https://github.com/Aliothmoon/SnipGlyph/releases/latest):
+   - **Standard**: `snipglyph-v*-windows-amd64.exe` (stores settings in `%APPDATA%\SnipGlyph` and data in `%LOCALAPPDATA%\SnipGlyph`)
+   - **Portable**: `snipglyph-v*-windows-amd64-portable.zip` (extract and run; keeps everything inside `data\`)
+2. Run `snipglyph.exe`. Since the binary is unsigned, Windows SmartScreen may show a prompt on first launch — click **More info → Run anyway**.
+3. Click the tray icon to open **Settings** to customize hotkeys, language, or translation API keys.
 
-#### Using Existing OneOCR Files (Without MS Store / Snipping Tool)
+## OneOCR Setup
 
-If you already have `oneocr.dll`, `oneocr.onemodel`, and `onnxruntime.dll` (x64), place all three files in either:
+SnipGlyph uses Microsoft's offline **OneOCR** engine (x64) and locates it in the following order:
 
-1. A `oneocr\` subfolder next to `snipglyph.exe` (recommended), or
-2. Directly beside `snipglyph.exe`.
+1. **Custom directory** *(optional)* — Set `ocr.dir` in `config.json` (relative paths resolve against the executable's folder) or set the `SNIPGLYPH_ONEOCR_DIR` environment variable.
+2. **Local files next to `snipglyph.exe`** *(no Microsoft Store or Snipping Tool required)* — Place x64 `oneocr.dll`, `oneocr.onemodel`, and `onnxruntime.dll` in either a `oneocr\` subfolder (recommended) or directly beside the executable:
+   ```text
+   SnipGlyph/
+   ├── snipglyph.exe
+   └── oneocr/
+       ├── oneocr.dll
+       ├── oneocr.onemodel
+       └── onnxruntime.dll
+   ```
+3. **Windows 11 Snipping Tool** *(automatic fallback)* — Automatically detected from the installed Microsoft Store package.
 
-You can also point to a custom folder via `ocr.dir` in `config.json` or the `SNIPGLYPH_ONEOCR_DIR` environment variable. If no local files are present, SnipGlyph automatically falls back to the installed Windows Snipping Tool.
+> [!NOTE]
+> OneOCR's model loader reads the model path using the Windows ANSI code page. SnipGlyph automatically falls back to Windows 8.3 short paths when needed, but keeping the files in an ASCII path avoids encoding issues on volumes with short names disabled.
 
-> **Note**: OneOCR's model loader uses the Windows ANSI code page for the model path; keep the files in an ASCII-compatible path if you encounter path encoding errors.
+## Portable Mode
 
-#### Portable Mode
+Enable portable mode on any `snipglyph.exe` using any of the following (in priority order):
 
-To store all settings, history, logs, and caches inside the application folder (`<exeDir>\data\`) instead of `%APPDATA%` / `%LOCALAPPDATA%`, enable portable mode in any of these ways:
+1. Launch with `snipglyph.exe --portable`
+2. Set environment variable `SNIPGLYPH_PORTABLE=1`
+3. Place an empty file named `portable` (or `portable.txt`) next to `snipglyph.exe`
 
-- Create an empty file named `portable` (or `portable.txt`) next to `snipglyph.exe`, or
-- Launch with `snipglyph.exe --portable`, or
-- Set environment variable `SNIPGLYPH_PORTABLE=1`.
+All writable files are kept under `<exeDir>\data\`, cleanly separated from a local `<exeDir>\oneocr\` folder:
 
-> **Note**: Saved API keys in `config.json` are encrypted with Windows DPAPI (bound to the current Windows user/machine). If you move a portable folder to another PC or account, other settings remain intact and you only need to re-enter your API key.
-
-### Build
-
-```sh
-CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o bin/snipglyph.exe ./cmd/snipglyph
+```text
+SnipGlyph/
+├── snipglyph.exe
+├── portable
+├── oneocr/                 # Optional local OneOCR files
+└── data/
+    ├── config.json         # Settings (API keys encrypted with Windows DPAPI)
+    ├── history.db          # OCR & translation history (SQLite FTS5)
+    ├── clipboard.db        # Clipboard history (SQLite FTS5)
+    ├── logs/snipglyph.log  # Size-capped rotating log
+    └── cache/oneocr/       # Staging cache (used only when loading from MSIX)
 ```
 
-### Disclaimer
+> [!TIP]
+> Stored API keys in `config.json` are protected with Windows DPAPI (bound to the current Windows user and machine). When moving a portable folder to another PC or account, all other settings stay intact — simply re-enter your API key in Settings.
 
-This project does **not** bundle or redistribute any Microsoft files. OneOCR belongs to Microsoft and is loaded at runtime from local files you provide or from your installed Windows Snipping Tool. Not affiliated with Microsoft.
+## Clipboard History Shortcuts
 
----
+<details>
+<summary>View keyboard shortcuts inside the Clipboard History panel (<code>Alt+V</code>)</summary>
 
-## 中文
-
-Windows 上的离线 **OCR** + **翻译** + **剪贴板历史**托盘工具，纯 Go 编写。
-
-### 功能
-
-| 功能 | 默认快捷键 |
+| Key | Action |
 |---|---|
-| 截图 OCR | `Win+Alt+Shift+C` |
-| 静默 OCR（识别后直接复制） | `Win+Alt+C` |
-| 截图翻译 | `Win+Alt+S` |
-| 划词翻译 | `Win+Alt+X` |
-| 输入翻译 | `Win+Alt+I` |
-| 剪贴板历史 | `Alt+V` |
+| Type directly | Filter current tab (space-separated terms) |
+| `↑` `↓` / `PgUp` `PgDn` / `Ctrl+Home` `End` | Navigate items |
+| `Enter` / Double-click | Paste into the previously active window |
+| `Shift+Enter` | Paste as plain text (strips HTML / RTF) |
+| `Ctrl+C` | Copy to clipboard without pasting |
+| `Ctrl+P` | Pin / unpin item |
+| `F2` | Edit text item (`Ctrl+S` to save, `Esc` to cancel) |
+| `Del` (`Shift+Del` while searching) | Delete item |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch tabs |
+| Right-click | Move/copy between tabs, or add/rename/delete tabs |
 
-- **双语界面**：默认自动跟随系统语言（简体中文 / English），可在 **设置 → 常规 → 界面语言** 中实时切换。
-- **离线 OCR**：使用 OneOCR（支持自带本地文件或读取本机 Windows 11 截图工具）。
-- **翻译与历史**：支持百度翻译、OCR/翻译历史搜索、剪贴板历史和开机自启。
+</details>
 
-### 使用
+## Build from Source
 
-从 [Releases](https://github.com/Aliothmoon/SnipGlyph/releases) 下载 `snipglyph.exe` 直接运行，程序常驻托盘，快捷键、语言和翻译密钥可在托盘菜单的「设置」里配置。
-
-#### 使用本地已有的 OneOCR 文件（无需安装 Microsoft Store / 截图工具）
-
-如果你本地已有 x64 版本的 `oneocr.dll`、`oneocr.onemodel` 和 `onnxruntime.dll`，直接放到以下任一位置即可优先加载：
-
-1. `snipglyph.exe` 同目录的 `oneocr\` 子目录（推荐）
-2. `snipglyph.exe` 同目录
-
-也可通过 `config.json` 中的 `ocr.dir` 或环境变量 `SNIPGLYPH_ONEOCR_DIR` 指定自定义目录。未找到本地文件时会自动回退到已安装的 Windows 截图工具。
-
-#### 便携模式
-
-通过以下任一方式开启便携模式，配置、历史记录、日志和缓存将统一保存在程序目录的 `data\` 下，不写入 `AppData`：
-
-- 在 `snipglyph.exe` 同目录创建一个名为 `portable`（或 `portable.txt`）的空文件
-- 使用命令行参数 `snipglyph.exe --portable` 启动
-- 设置环境变量 `SNIPGLYPH_PORTABLE=1`
-
-> **提示**：`config.json` 中的翻译密钥使用 Windows DPAPI 加密（与当前 Windows 账户/设备绑定）。将便携目录迁移到其他电脑后，其余配置均正常保留，只需重新填写密钥即可。
-
-### 构建
+Requires Go 1.26+ on Windows:
 
 ```sh
+# Build release binary
 CGO_ENABLED=0 go build -ldflags "-H windowsgui -s -w" -o bin/snipglyph.exe ./cmd/snipglyph
+
+# Run tests
+go test ./...
 ```
 
-### 声明
+If you modify `winres/winres.json` or `winres/icon.png`, regenerate the embedded Windows resources first:
 
-本项目不包含也不分发任何微软文件，OneOCR 属于微软，运行时从用户本地文件或本机截图工具读取。与 Microsoft 无关。
+```sh
+go generate ./cmd/snipglyph
+```
+
+## Disclaimer
+
+This repository and its releases do **not** include or redistribute any Microsoft files. OneOCR belongs to Microsoft and is loaded at runtime from local files you provide or from your installed Windows Snipping Tool. This project is not affiliated with or endorsed by Microsoft.
